@@ -1,8 +1,8 @@
 # Agent Second Brain
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![GitHub Stars](https://img.shields.io/github/stars/smixs/agent-second-brain)
-![GitHub Forks](https://img.shields.io/github/forks/smixs/agent-second-brain)
+[![Stars](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fsmixs%2Fagent-second-brain&query=%24.stargazers_count&label=stars&logo=github&color=blue)](https://github.com/smixs/agent-second-brain/stargazers)
+[![Forks](https://img.shields.io/github/forks/smixs/agent-second-brain?style=flat&logo=github)](https://github.com/smixs/agent-second-brain/forks)
 
 <p align="center">
   <img alt="Agent Second Brain" src="https://github.com/user-attachments/assets/c1b8a1db-bf4d-40d1-b54f-a7dbdce4afda" />
