@@ -5,7 +5,7 @@
 [![Forks](https://img.shields.io/github/forks/smixs/agent-second-brain?style=flat&logo=github)](https://github.com/smixs/agent-second-brain/forks)
 
 <p align="center">
-  <img alt="Agent Second Brain" src="https://github.com/user-attachments/assets/c1b8a1db-bf4d-40d1-b54f-a7dbdce4afda" />
+  <img alt="Agent Second Brain" src="https://github.com/user-attachments/assets/5b3611d9-11ba-40a1-92fc-8dc78d78d75b" />
 </p>
 
 A voice-first AI assistant that turns your Telegram messages into an organized knowledge base. Send voice notes, text, photos, or forwarded messages — the agent classifies everything, creates tasks in Todoist, saves thoughts to an Obsidian vault, tracks your goals, and sends you a daily report. Your personal second brain that runs 24/7 on a $5 VPS.
