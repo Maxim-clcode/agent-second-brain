@@ -64,6 +64,8 @@ The bot runs as a systemd service on a VPS. A daily timer (21:00 UTC) triggers t
 
 Skills live in `vault/.claude/skills/` and are invoked automatically by Claude Code during processing.
 
+> **Want just the memory engine?** See [agent-memory-skill](https://github.com/smixs/agent-memory-skill) — standalone, zero dependencies.
+
 ---
 
 ## Quick Start
