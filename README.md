@@ -6,6 +6,7 @@
 
 <p align="center">
   <img alt="Agent Second Brain" src="https://github.com/user-attachments/assets/ea384e65-436b-48a1-a4e1-2b003cafcdbf" />
+  <img width="3168" height="1344" alt="freepik__create-a-wide-horizontal-banner-for-a-github-repos__42058" src="https://github.com/user-attachments/assets/c1b8a1db-bf4d-40d1-b54f-a7dbdce4afda" />
 </p>
 
 A voice-first AI assistant that turns your Telegram messages into an organized knowledge base. Send voice notes, text, photos, or forwarded messages — the agent classifies everything, creates tasks in Todoist, saves thoughts to an Obsidian vault, tracks your goals, and sends you a daily report. Your personal second brain that runs 24/7 on a $5 VPS.
