@@ -1,8 +1,8 @@
 # Agent Second Brain v2
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![GitHub Stars](https://img.shields.io/github/stars/smixs/agent-second-brain?style=social)](https://github.com/smixs/agent-second-brain)
-[![GitHub Forks](https://img.shields.io/github/forks/smixs/agent-second-brain?style=social)](https://github.com/smixs/agent-second-brain/fork)
+![GitHub Stars](https://img.shields.io/github/stars/smixs/agent-second-brain)
+![GitHub Forks](https://img.shields.io/github/forks/smixs/agent-second-brain)
 
 <p align="center">
   <img alt="Agent Second Brain" src="https://github.com/user-attachments/assets/ea384e65-436b-48a1-a4e1-2b003cafcdbf" />
