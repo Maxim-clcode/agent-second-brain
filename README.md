@@ -235,12 +235,25 @@ The Telegram bot presents an inline keyboard with the following buttons:
 | ✨ Query | Ask the agent anything — it reads your vault and Todoist |
 | ❓ Help | Show available commands and usage tips |
 
-You can also send messages directly:
+### Talk to it like a real assistant
+
+Buttons are just shortcuts. You can **message the bot directly** — voice or text — and have a full conversation. Ask follow-up questions, clarify, argue, brainstorm. It remembers context within the session and has access to your entire vault, goals, and Todoist.
+
+**What you can send:**
 
 - **Voice notes** — transcribed via Deepgram, saved to daily file
-- **Text** — saved as-is to daily file
+- **Text** — links, quotes, quick thoughts
 - **Photos** — saved with AI-generated descriptions
 - **Forwarded messages** — saved with source attribution
+
+**Example conversation:**
+
+> You: "What did I write about the marketing project last week?"
+> Bot: *finds and shows relevant entries*
+> You: "Turn the second idea into a Todoist task for Monday"
+> Bot: *creates the task*
+> You: "Actually make it high priority and add a subtask for the presentation"
+> Bot: *updates the task*
 
 ---
 
