@@ -16,6 +16,7 @@ A voice-first AI assistant that turns your Telegram messages into an organized k
 
 ## What's New in v2
 
+- **Conversational Agent** — Talk to the bot like a real assistant. No need to press buttons — just send a voice note or text message and have a natural dialogue. Ask follow-up questions, clarify, change your mind. The agent remembers context within the session and has full access to your vault, goals, and Todoist.
 - **Agent Memory** — Ebbinghaus forgetting curve with tiered decay. Memory cards move through tiers (core / active / warm / cold / archive) based on access patterns and time.
 - **Vault Health** — Automated health scoring, Map of Content (MOC) generation, broken link repair, and orphan detection across your entire vault.
 - **3-Phase Pipeline** — Processing is now split into CAPTURE, EXECUTE, and REFLECT phases with structured JSON handoff between each stage.
