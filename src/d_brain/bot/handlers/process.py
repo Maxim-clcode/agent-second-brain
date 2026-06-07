@@ -11,7 +11,7 @@ from aiogram.types import Message
 from d_brain.bot.formatters import format_process_report
 from d_brain.config import get_settings
 from d_brain.services.git import VaultGit
-from d_brain.services.processor import ClaudeProcessor
+from d_brain.services.runtime import get_ask_lock, get_processor
 
 router = Router(name="process")
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ async def cmd_process(message: Message) -> None:
     status_msg = await message.answer("⏳ Processing... (may take up to 10 min)")
 
     settings = get_settings()
-    processor = ClaudeProcessor(settings.vault_path, settings.todoist_api_key)
+    processor = get_processor(settings)
     git = VaultGit(settings.vault_path)
 
     # Run subprocess in thread to avoid blocking event loop
@@ -49,7 +49,8 @@ async def cmd_process(message: Message) -> None:
 
         return await task
 
-    report = await process_with_progress()
+    async with get_ask_lock():
+        report = await process_with_progress()
 
     # Commit and push changes
     if "error" not in report:
