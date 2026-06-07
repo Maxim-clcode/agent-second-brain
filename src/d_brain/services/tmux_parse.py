@@ -43,8 +43,11 @@ def _require_rid(rid: str) -> None:
 
 
 def _line_anchored(rid: str, kind: str) -> re.Pattern[str]:
-    # Own line, tolerating leading/trailing whitespace and a trailing CR.
-    return re.compile(rf"(?m)^[ \t]*<<<{kind}:{re.escape(rid)}>>>[ \t]*\r?$")
+    # The marker must be at the END of its line (only whitespace after it).
+    # Any prefix is allowed — Claude Code prefixes the first answer line with
+    # "⏺ " and indents the rest. The input echo has TEXT after the marker
+    # ("<<<R:id>>> and a line..."), so it never matches end-of-line.
+    return re.compile(rf"(?m)^.*?<<<{kind}:{re.escape(rid)}>>>[ \t]*\r?$")
 
 
 def extract_reply(text: str, rid: str) -> str | None:
@@ -104,8 +107,12 @@ _LOGGED_OUT_RE = re.compile(
     r"authentication (failed|required|expired)|session expired",
     re.I,
 )
-# READY: idle prompt (allow ghost suggestions after ❯) or the bypass footer.
-_READY_RE = re.compile(r"(?m)^\s*❯|bypass permissions on")
+# READY signals. The bypass footer is our always-present anchor (we launch
+# with --dangerously-skip-permissions); it can sit above a blank bottom, so
+# it is matched over the WHOLE pane. The idle ❯ is a secondary signal matched
+# only in chrome (a bare ❯ elsewhere could be model output).
+_FOOTER_RE = re.compile(r"bypass permissions on")
+_IDLE_RE = re.compile(r"(?m)^\s*❯")
 _STARTING_RE = re.compile(r"Claude Code v\d", re.I)
 
 
@@ -122,14 +129,18 @@ def classify_state(text: str) -> PaneState:
     """
     if not text.strip():
         return PaneState.UNKNOWN
-    chrome = _chrome(text)
-    if _TRUST_MENU_RE.search(chrome):
+    # TRUST is a full-screen modal whose menu sits at the TOP; on a tall pane
+    # the chrome (bottom) is blank, so match it over the WHOLE pane. Safe
+    # because it anchors on the numbered menu line, which the model cannot
+    # reproduce verbatim in a reply.
+    if _TRUST_MENU_RE.search(text):
         return PaneState.TRUST_PROMPT
+    chrome = _chrome(text)
     if _RATE_RE.search(chrome):
         return PaneState.RATE_LIMITED
     if _LOGGED_OUT_RE.search(chrome):
         return PaneState.LOGGED_OUT
-    if _READY_RE.search(chrome):
+    if _FOOTER_RE.search(text) or _IDLE_RE.search(chrome):
         return PaneState.READY
     if _STARTING_RE.search(text):
         return PaneState.STARTING

@@ -89,6 +89,15 @@ def test_extract_reply_takes_line_anchored_pair_not_inline_echo():
     assert extract_reply(text, rid) == "PONG"
 
 
+def test_extract_reply_with_tui_bullet_prefix():
+    """Regression (live): Claude Code prefixes the first answer line with
+    '⏺ ' and indents the rest. The marker is at the END of its line; that,
+    not 'starts the line', is what distinguishes answer from inline echo."""
+    rid = "bull1234"
+    text = f"⏺ <<<R:{rid}>>>\n  PONG\n  <<<E:{rid}>>>\n❯\n"
+    assert extract_reply(text, rid) == "PONG"
+
+
 def test_extract_reply_multiline_answer():
     rid = "abc12345"
     text = f"<<<R:{rid}>>>\nline one\nline two\n<<<E:{rid}>>>\n"
@@ -184,6 +193,14 @@ def test_classify_ready_without_bypass_footer():
     assert classify_state(READY_NO_BYPASS_CAPTURE) == PaneState.READY
 
 
+def test_classify_ready_when_footer_above_empty_bottom():
+    """Regression (live): the TUI draws content at the top and leaves the
+    bottom of the screen blank, so the footer (bypass/idle) is NOT in the
+    chrome region. READY must still be detected via the footer anchor."""
+    text = READY_CAPTURE + "\n" * 30
+    assert classify_state(text) == PaneState.READY
+
+
 def test_classify_starting():
     assert classify_state(STARTING_CAPTURE) == PaneState.STARTING
 
@@ -244,6 +261,14 @@ def test_classify_no_false_positive_trust_in_body():
         )
         == PaneState.READY
     )
+
+
+def test_classify_trust_when_menu_above_empty_chrome():
+    """Regression (found in live integration): the trust dialog is a
+    full-screen modal drawn at the TOP; on a tall pane the bottom 18 lines
+    (chrome) are blank. Trust must still be detected over the whole pane."""
+    text = TRUST_CAPTURE + "\n" * 40
+    assert classify_state(text) == PaneState.TRUST_PROMPT
 
 
 def test_classify_priority_stack_trust_first():

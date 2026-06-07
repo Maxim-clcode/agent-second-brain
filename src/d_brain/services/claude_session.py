@@ -1,0 +1,356 @@
+"""Drive a persistent INTERACTIVE Claude Code session inside a tmux pane.
+
+This is the core of the post-2026-06-15 design: instead of spawning
+`claude -p` per request (which moves to a paid Agent SDK credit), we keep
+one long-lived interactive `claude` alive in tmux and "type" prompts into
+it. Interactive usage stays on the subscription.
+
+All access to the pane goes through a single cross-process file lock
+(`pane.lock`) so the bot, the daily pipeline and the watchdog never talk to
+the pane at once. The watchdog recovers a wedged session via
+``force_recover()`` (non-blocking lock), and ``ask()`` self-detects a stall
+(no new bytes in pane.log) so it releases the lock quickly instead of
+holding it for the full timeout.
+
+Pure text parsing lives in tmux_parse; this module only orchestrates tmux
+and timing, so it is tested with a fake runner + injected clock/sleep/rid.
+
+NOTE: runtime_dir must be on a LOCAL filesystem — fcntl.flock is unreliable
+on NFS/9p and would silently degrade to no serialization.
+"""
+
+import fcntl
+import logging
+import os
+import shlex
+import subprocess
+import time
+import uuid
+from collections.abc import Callable
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+
+from d_brain.services.tmux_parse import (
+    PaneState,
+    classify_state,
+    extract_reply,
+    is_complete,
+)
+
+logger = logging.getLogger(__name__)
+
+Runner = Callable[..., subprocess.CompletedProcess]
+
+DEFAULT_TIMEOUT = 1200  # 20 min, matches the old subprocess pipeline
+DEFAULT_STALL_TIMEOUT = 180  # no new pane bytes for this long ⇒ wedged
+_PANE_WIDTH = "200"
+# Height 50 (not taller): the TUI draws its footer (idle ❯ / bypass line)
+# just below content, so on a tall pane the footer lands mid-screen with a
+# blank bottom — and chrome-region state detection misses it. At 50 the
+# footer sits near the bottom. Long replies are still captured via scrollback.
+_PANE_HEIGHT = "50"
+# Scrollback lines to capture. NOTE (verified live on tmux 3.6b): `-S -` and
+# large counts like `-S -2000` return EMPTY on this TUI; a modest concrete
+# count works and includes scrollback (pane history ~2000 lines).
+_CAPTURE_SCROLLBACK = "-200"
+
+
+@dataclass
+class AskResult:
+    """Outcome of a single ask() round."""
+
+    status: str  # "ok" | "rate_limited" | "logged_out" | "timeout" | "error"
+    reply: str | None = None
+    detail: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.status == "ok"
+
+
+class ClaudeSession:
+    """A single interactive Claude Code session in a named tmux session."""
+
+    def __init__(
+        self,
+        session_name: str,
+        work_dir: Path,
+        runtime_dir: Path,
+        *,
+        mcp_config: Path | None = None,
+        system_prompt_file: Path | None = None,
+        model: str | None = None,
+        claude_bin: str = "claude",
+        runner: Runner = subprocess.run,
+        sleep_fn: Callable[[float], None] = time.sleep,
+        clock_fn: Callable[[], float] = time.monotonic,
+        rid_factory: Callable[[], str] | None = None,
+        liveness_fn: Callable[[], float] | None = None,
+        poll_interval: float = 1.0,
+        paste_settle: float = 0.3,
+        startup_timeout: float = 90.0,
+        stall_timeout: float = DEFAULT_STALL_TIMEOUT,
+    ) -> None:
+        self.session_name = session_name
+        self.work_dir = Path(work_dir)
+        self.runtime_dir = Path(runtime_dir)
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.mcp_config = Path(mcp_config) if mcp_config else None
+        self.system_prompt_file = (
+            Path(system_prompt_file) if system_prompt_file else None
+        )
+        self.model = model
+        self.claude_bin = claude_bin
+        self._runner = runner
+        self._sleep = sleep_fn
+        self._clock = clock_fn
+        self._rid_factory = rid_factory or (lambda: uuid.uuid4().hex[:8])
+        self._liveness_fn = liveness_fn or self._pane_log_mtime
+        self._poll_interval = poll_interval
+        self._paste_settle = paste_settle
+        self._startup_timeout = startup_timeout
+        self._stall_timeout = stall_timeout
+
+        # Address the session's active window/pane by name. A fixed ":0.0"
+        # breaks under `base-index 1` (window 0 won't exist) → empty capture.
+        self._target = session_name
+        self._pane_log = self.runtime_dir / "pane.log"
+        self._ready_flag = self.runtime_dir / "ready"
+        self._inflight = self.runtime_dir / "inflight"
+        self._pane_lock = self.runtime_dir / "pane.lock"
+
+    # ── tmux helpers ─────────────────────────────────────────────────
+
+    def _tmux(self, *args: str) -> subprocess.CompletedProcess:
+        proc = self._runner(
+            ["tmux", *args], capture_output=True, text=True, check=False
+        )
+        if proc.returncode != 0:
+            logger.warning(
+                "tmux %s failed (rc=%s): %s",
+                args[0],
+                proc.returncode,
+                (proc.stderr or "").strip(),
+            )
+        return proc
+
+    def _capture(self) -> str:
+        return self._tmux(
+            "capture-pane", "-t", self._target, "-p", "-S", _CAPTURE_SCROLLBACK
+        ).stdout
+
+    def _session_exists(self) -> bool:
+        return self._tmux("has-session", "-t", self.session_name).returncode == 0
+
+    def _send_enter(self) -> None:
+        self._tmux("send-keys", "-t", self._target, "Enter")
+
+    def _interrupt(self) -> None:
+        self._tmux("send-keys", "-t", self._target, "C-c")
+
+    def _pane_log_mtime(self) -> float:
+        try:
+            return self._pane_log.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    # ── file lock (single lock; see module docstring) ────────────────
+
+    @contextmanager
+    def _locked(self, *, blocking: bool = True):
+        fd = os.open(self._pane_lock, os.O_CREAT | os.O_RDWR, 0o644)
+        acquired = False
+        try:
+            flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+            fcntl.flock(fd, flags)
+            acquired = True
+            yield True
+        except BlockingIOError:
+            yield False
+        finally:
+            if acquired:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    # ── lifecycle ────────────────────────────────────────────────────
+
+    def _start_command(self) -> str:
+        parts = [shlex.quote(self.claude_bin), "--dangerously-skip-permissions"]
+        if self.mcp_config:
+            parts += ["--mcp-config", shlex.quote(str(self.mcp_config))]
+        if self.system_prompt_file:
+            parts += [
+                "--append-system-prompt",
+                f'"$(cat {shlex.quote(str(self.system_prompt_file))})"',
+            ]
+        if self.model:
+            parts += ["--model", shlex.quote(self.model)]
+        return f"cd {shlex.quote(str(self.work_dir))} && " + " ".join(parts)
+
+    def _ensure_locked(self) -> None:
+        """Create + ready the session if needed. Caller must hold the lock."""
+        if self._session_exists():
+            return
+        self._ready_flag.unlink(missing_ok=True)
+        self._tmux(
+            "new-session",
+            "-d",
+            "-s",
+            self.session_name,
+            "-x",
+            _PANE_WIDTH,
+            "-y",
+            _PANE_HEIGHT,
+            self._start_command(),
+        )
+        self._tmux(
+            "pipe-pane",
+            "-t",
+            self._target,
+            f"cat >> {shlex.quote(str(self._pane_log))}",
+        )
+
+        deadline = self._clock() + self._startup_timeout
+        last_state: PaneState | None = None
+        while self._clock() < deadline:
+            cap = self._capture()
+            state = classify_state(cap)
+            # Debounce: only Enter on the transition INTO the trust prompt,
+            # never on every poll (avoids stray blank submissions).
+            if state == PaneState.TRUST_PROMPT:
+                if last_state != PaneState.TRUST_PROMPT:
+                    self._send_enter()
+                last_state = state
+                self._sleep(self._poll_interval)
+                continue
+            if state == PaneState.READY:
+                self._ready_flag.write_text("ready\n")
+                logger.info("Claude session %s is ready", self.session_name)
+                return
+            last_state = state
+            self._sleep(self._poll_interval)
+        raise RuntimeError(
+            f"session {self.session_name} not ready in {self._startup_timeout}s; "
+            f"last state={last_state}; pane tail:\n"
+            + "\n".join(self._capture().splitlines()[-8:])
+        )
+
+    def ensure_session(self) -> None:
+        with self._locked() as got:
+            if got:
+                self._ensure_locked()
+
+    def is_healthy(self) -> bool:
+        return self._session_exists()
+
+    def force_recover(self) -> bool:
+        """Watchdog entry point: take the lock non-blocking; if free, kill and
+        recreate. Returns False if a live ask() currently holds the lock."""
+        with self._locked(blocking=False) as got:
+            if not got:
+                return False
+            self._tmux("kill-session", "-t", self.session_name)
+            self._ready_flag.unlink(missing_ok=True)
+            self._inflight.unlink(missing_ok=True)
+            self._ensure_locked()
+            return True
+
+    def kill(self) -> None:
+        """Tear down the session (lock-guarded). For CLI/teardown use."""
+        with self._locked() as got:
+            if got:
+                self._tmux("kill-session", "-t", self.session_name)
+                self._ready_flag.unlink(missing_ok=True)
+                self._inflight.unlink(missing_ok=True)
+
+    def clear(self) -> None:
+        """Manual recovery only (durable-state-first: no scheduled clear)."""
+        with self._locked() as got:
+            if got:
+                self._send_text("/clear")
+                self._send_enter()
+
+    # ── sending ──────────────────────────────────────────────────────
+
+    def _send_text(self, text: str) -> None:
+        buf = f"dbrain_{uuid.uuid4().hex[:6]}"
+        self._tmux("set-buffer", "-b", buf, text)
+        self._tmux("paste-buffer", "-t", self._target, "-b", buf, "-d")
+        self._sleep(self._paste_settle)
+
+    def _send_prompt(self, prompt: str, rid: str) -> None:
+        # Markers are written INLINE (mid-sentence) so the input echo never
+        # forms a line-anchored pair; only the model's answer does.
+        payload = (
+            f"{prompt}\n\n"
+            f"When done, wrap your ENTIRE reply between a line containing only "
+            f"<<<R:{rid}>>> and a line containing only <<<E:{rid}>>>."
+        )
+        self._send_text(payload)
+        self._send_enter()
+
+    # ── ask ──────────────────────────────────────────────────────────
+
+    def ask(
+        self,
+        prompt: str,
+        *,
+        timeout: float = DEFAULT_TIMEOUT,
+        request_id: str | None = None,
+    ) -> AskResult:
+        """Send a prompt, return the model's reply (or a non-ok status).
+
+        Lock-guarded so concurrent callers serialize on the pane. Never
+        raises and never blocks forever: ensure failure → error, rate-limit /
+        logged-out short-circuit, a frozen pane (stall) is interrupted, and a
+        hard timeout returns a timeout status. request_id is for logging only;
+        the marker rid is always freshly generated to avoid stale answers.
+        """
+        rid = self._rid_factory()
+        log_id = request_id or rid
+        with self._locked() as got:
+            if not got:  # only happens with non-blocking; blocking=True here
+                return AskResult("error", detail="could not acquire pane lock")
+            try:
+                self._ensure_locked()
+            except Exception as exc:  # noqa: BLE001 — must never escape ask()
+                logger.error("ensure_session failed for %s: %s", log_id, exc)
+                return AskResult("error", detail=f"session start failed: {exc}")
+
+            pre = classify_state(self._capture())
+            if pre == PaneState.RATE_LIMITED:
+                return AskResult("rate_limited")
+            if pre == PaneState.LOGGED_OUT:
+                return AskResult("logged_out")
+
+            self._inflight.write_text(f"{log_id}\n{self._clock()}\n")
+            self._send_prompt(prompt, rid)
+
+            last_live = self._liveness_fn()
+            last_change = self._clock()
+            deadline = self._clock() + timeout
+            while self._clock() < deadline:
+                cap = self._capture()
+                state = classify_state(cap)
+                if state == PaneState.RATE_LIMITED:
+                    self._inflight.unlink(missing_ok=True)
+                    return AskResult("rate_limited")
+                if state == PaneState.LOGGED_OUT:
+                    self._inflight.unlink(missing_ok=True)
+                    return AskResult("logged_out")
+                if is_complete(cap, rid):
+                    self._inflight.unlink(missing_ok=True)
+                    return AskResult("ok", reply=extract_reply(cap, rid))
+
+                live = self._liveness_fn()
+                if live != last_live:
+                    last_live, last_change = live, self._clock()
+                elif self._clock() - last_change > self._stall_timeout:
+                    self._interrupt()
+                    # leave inflight as an orphan/stuck signal for the watchdog
+                    return AskResult("error", detail="session stalled (no output)")
+                self._sleep(self._poll_interval)
+
+            # timed out: prompt is still physically in the pane → keep inflight
+            return AskResult("timeout", detail=f"no reply in {timeout}s")
