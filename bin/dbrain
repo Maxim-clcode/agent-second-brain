@@ -1,0 +1,67 @@
+#!/bin/bash
+# dbrain — one command to control your d-brain assistant.
+#
+# Usage: dbrain <status|restart|logs|doctor|clear|attach|repair|login>
+#
+# Designed for non-technical users: every command prints plain-language output
+# and the next thing to try if something is wrong.
+set -euo pipefail
+
+RUNTIME_DIR="${DBRAIN_RUNTIME_DIR:-$HOME/.dbrain}"
+PROJECT_FILE="$RUNTIME_DIR/project.path"
+PROJECT_DIR="${DBRAIN_PROJECT:-$( [ -f "$PROJECT_FILE" ] && cat "$PROJECT_FILE" || echo "$HOME/projects/dbrain" )}"
+NAME_FILE="$RUNTIME_DIR/brain.name"
+BRAIN="$( [ -f "$NAME_FILE" ] && cat "$NAME_FILE" || echo "dbrain" )"
+
+cmd="${1:-status}"
+
+_uv() { (cd "$PROJECT_DIR" && uv run "$@"); }
+
+case "$cmd" in
+  status)
+    echo "📋 Статус d-brain"
+    if [ -f "$RUNTIME_DIR/STATUS.md" ]; then cat "$RUNTIME_DIR/STATUS.md"; else echo "(нет STATUS.md — watchdog ещё не запускался)"; fi
+    echo "— bot:      $(systemctl --user is-active dbrain-bot.service 2>/dev/null || echo unknown)"
+    echo "— watchdog: $(systemctl --user is-active dbrain-watchdog.service 2>/dev/null || echo unknown)"
+    if tmux has-session -t "$BRAIN" 2>/dev/null; then echo "— мозг:     жив ($BRAIN)"; else echo "— мозг:     НЕ запущен"; fi
+    ;;
+  restart)
+    echo "♻️  Перезапускаю сервисы…"
+    systemctl --user reset-failed dbrain-bot.service dbrain-watchdog.service 2>/dev/null || true
+    systemctl --user restart dbrain-bot.service dbrain-watchdog.service
+    echo "Готово. Проверь: dbrain status"
+    ;;
+  logs)
+    journalctl --user -u dbrain-bot.service -n "${2:-80}" --no-pager 2>/dev/null || echo "Логи недоступны (нет systemd --user?)"
+    ;;
+  doctor)
+    echo "🩺 Запускаю осмотр…"
+    _uv python -m d_brain.services.doctor
+    ;;
+  clear)
+    if tmux has-session -t "$BRAIN" 2>/dev/null; then
+      tmux send-keys -t "$BRAIN" "/clear" Enter
+      echo "🧹 Память сессии очищена (durable-данные в файлах не тронуты)."
+    else
+      echo "Мозг не запущен — нечего чистить. Попробуй: dbrain repair"
+    fi
+    ;;
+  attach)
+    exec tmux attach -t "$BRAIN"
+    ;;
+  repair)
+    echo "🔧 Чиню: сброс ошибок + перезапуск…"
+    systemctl --user reset-failed dbrain-bot.service dbrain-watchdog.service 2>/dev/null || true
+    systemctl --user restart dbrain-bot.service dbrain-watchdog.service 2>/dev/null || true
+    echo "Если не помогло, посмотри: dbrain logs"
+    ;;
+  login)
+    echo "🔑 Запускаю вход в Claude (нужна подписка)…"
+    echo "Открой ссылку ниже на телефоне/ноутбуке, подтверди и вставь код сюда:"
+    claude setup-token
+    ;;
+  *)
+    echo "Usage: dbrain <status|restart|logs|doctor|clear|attach|repair|login>"
+    exit 1
+    ;;
+esac
