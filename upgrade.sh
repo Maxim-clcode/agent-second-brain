@@ -58,9 +58,14 @@ for f in "$PROJECT_DIR"/deploy/dbrain-*.service "$PROJECT_DIR"/deploy/dbrain-*.t
 done
 systemctl --user daemon-reload
 loginctl enable-linger "$USER" 2>/dev/null || echo "  ⚠ could not enable linger (services won't start on boot without it)"
-systemctl --user enable --now \
+systemctl --user enable \
     dbrain-bot.service dbrain-watchdog.service \
     dbrain-process.timer dbrain-doctor.timer dbrain-weekly.timer
+# restart (not just enable --now): on a re-run the units may have changed, and
+# enable --now won't re-apply a new unit to an already-running service.
+# KillMode=process means restarting the bot/watchdog does NOT kill the brain.
+systemctl --user restart dbrain-bot.service dbrain-watchdog.service
+systemctl --user start dbrain-process.timer dbrain-doctor.timer dbrain-weekly.timer
 
 say "7/8 Guard: no claude -p in the hot path"
 bash "$PROJECT_DIR/scripts/check-no-claude-p.sh"
