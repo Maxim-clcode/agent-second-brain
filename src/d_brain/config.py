@@ -31,6 +31,38 @@ class Settings(BaseSettings):
         description="Whether to allow access to all users (security risk!)",
     )
 
+    # ── persistent tmux session ──────────────────────────────────────
+    runtime_dir: Path = Field(
+        default_factory=lambda: Path.home() / ".dbrain",
+        description="Runtime dir for locks, pane.log, ready/inflight flags",
+    )
+    brain_session_name: str = Field(
+        default="",
+        description="tmux session name (empty → generated & persisted per install)",
+    )
+    claude_model: str = Field(
+        default="",
+        description="Model for the session (empty = Claude Code default)",
+    )
+    tz: str = Field(default="UTC", description="Timezone for timers/reports")
+
+    # ── escape hatch (fallback provider routing) ─────────────────────
+    dbrain_mode: str = Field(
+        default="interactive",
+        description="interactive (subscription) | router (claude -p via base URL)",
+    )
+    anthropic_base_url: str = Field(
+        default="", description="Fallback provider base URL (router mode)"
+    )
+    anthropic_auth_token: str = Field(
+        default="", description="Fallback provider API key (router mode)"
+    )
+
+    @property
+    def admin_chat_id(self) -> int | None:
+        """First allowed user — destination for health alerts / reports."""
+        return self.allowed_user_ids[0] if self.allowed_user_ids else None
+
     @property
     def daily_path(self) -> Path:
         """Path to daily notes directory."""
