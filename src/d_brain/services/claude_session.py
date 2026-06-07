@@ -244,6 +244,10 @@ class ClaudeSession:
     def is_healthy(self) -> bool:
         return self._session_exists()
 
+    def current_state(self) -> PaneState:
+        """Classify the live pane (for the watchdog / doctor)."""
+        return classify_state(self._capture())
+
     def force_recover(self) -> bool:
         """Watchdog entry point: take the lock non-blocking; if free, kill and
         recreate. Returns False if a live ask() currently holds the lock."""
