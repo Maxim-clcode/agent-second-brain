@@ -255,3 +255,41 @@ def test_kill_sends_kill_session(tmp_path, clock):
     s = make_session(tmp_path, fake, clock)
     s.kill()
     assert "kill-session" in fake.sent_subcommands()
+
+
+# ── RouterSession (escape hatch) ──────────────────────────────────────────
+
+
+def test_router_session_uses_claude_p_with_provider_env(tmp_path):
+    from d_brain.services.claude_session import RouterSession
+
+    captured = {}
+
+    def runner(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env", {})
+        return subprocess.CompletedProcess(cmd, 0, stdout="hi there\n", stderr="")
+
+    r = RouterSession(
+        base_url="https://provider.example",
+        auth_token="secret",
+        work_dir=tmp_path,
+        runner=runner,
+    )
+    res = r.ask("hello")
+    assert res.ok
+    assert res.reply == "hi there"
+    assert "--print" in captured["cmd"]
+    assert captured["env"]["ANTHROPIC_BASE_URL"] == "https://provider.example"
+    assert captured["env"]["ANTHROPIC_AUTH_TOKEN"] == "secret"
+
+
+def test_router_session_error_on_nonzero(tmp_path):
+    from d_brain.services.claude_session import RouterSession
+
+    def runner(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom")
+
+    r = RouterSession(base_url="u", auth_token="k", work_dir=tmp_path, runner=runner)
+    res = r.ask("x")
+    assert res.status == "error"

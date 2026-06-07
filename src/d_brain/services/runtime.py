@@ -11,7 +11,7 @@ import asyncio
 import uuid
 
 from d_brain.config import Settings
-from d_brain.services.claude_session import ClaudeSession
+from d_brain.services.claude_session import ClaudeSession, RouterSession
 from d_brain.services.processor import ClaudeProcessor
 
 _session: ClaudeSession | None = None
@@ -40,20 +40,31 @@ def _persisted_name(settings: Settings) -> str:
     return name
 
 
-def get_session(settings: Settings) -> ClaudeSession:
+def get_session(settings: Settings):
+    """Return the shared session: interactive ClaudeSession, or RouterSession
+    when the escape hatch (DBRAIN_MODE=router) is engaged."""
     global _session
-    if _session is None:
-        project_root = settings.vault_path.parent
-        mcp = project_root / "mcp-config.json"
-        brain_prompt = project_root / "deploy" / "brain-system.md"
-        _session = ClaudeSession(
-            session_name=_persisted_name(settings),
+    if _session is not None:
+        return _session
+    if settings.dbrain_mode == "router":
+        _session = RouterSession(
+            base_url=settings.anthropic_base_url,
+            auth_token=settings.anthropic_auth_token,
             work_dir=settings.vault_path,
-            runtime_dir=settings.runtime_dir,
-            mcp_config=mcp if mcp.exists() else None,
-            system_prompt_file=brain_prompt if brain_prompt.exists() else None,
             model=settings.claude_model or None,
         )
+        return _session
+    project_root = settings.vault_path.parent
+    mcp = project_root / "mcp-config.json"
+    brain_prompt = project_root / "deploy" / "brain-system.md"
+    _session = ClaudeSession(
+        session_name=_persisted_name(settings),
+        work_dir=settings.vault_path,
+        runtime_dir=settings.runtime_dir,
+        mcp_config=mcp if mcp.exists() else None,
+        system_prompt_file=brain_prompt if brain_prompt.exists() else None,
+        model=settings.claude_model or None,
+    )
     return _session
 
 

@@ -360,3 +360,76 @@ class ClaudeSession:
 
             # timed out: prompt is still physically in the pane → keep inflight
             return AskResult("timeout", detail=f"no reply in {timeout}s")
+
+
+class RouterSession:
+    """Escape-hatch fallback: route ask() to ``claude -p`` against an
+    ALTERNATE provider via ANTHROPIC_BASE_URL.
+
+    Used ONLY when DBRAIN_MODE=router (Anthropic closed the interactive path).
+    Kept as a separate class with the same ask() shape so the interactive
+    ClaudeSession stays untouched. Requires a SEPARATE billed API key, not the
+    subscription OAuth — reusing the subscription token is exactly what
+    Anthropic blocks.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        auth_token: str,
+        work_dir: Path,
+        model: str | None = None,
+        claude_bin: str = "claude",
+        runner: Runner = subprocess.run,
+    ) -> None:
+        self.base_url = base_url
+        self.auth_token = auth_token
+        self.work_dir = Path(work_dir)
+        self.model = model
+        self.claude_bin = claude_bin
+        self._runner = runner
+
+    def ask(
+        self,
+        prompt: str,
+        *,
+        timeout: float = DEFAULT_TIMEOUT,
+        request_id: str | None = None,
+    ) -> AskResult:
+        env = os.environ.copy()
+        env["ANTHROPIC_BASE_URL"] = self.base_url
+        env["ANTHROPIC_AUTH_TOKEN"] = self.auth_token
+        cmd = [self.claude_bin, "--print"]  # ALLOW-CLAUDE-P: escape hatch only
+        cmd += ["--dangerously-skip-permissions"]
+        if self.model:
+            cmd += ["--model", self.model]
+        cmd += ["-p", prompt]  # ALLOW-CLAUDE-P: escape hatch only
+        try:
+            proc = self._runner(
+                cmd,
+                cwd=str(self.work_dir),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            return AskResult("timeout", detail=f"no reply in {timeout}s")
+        if proc.returncode != 0:
+            return AskResult("error", detail=(proc.stderr or "").strip())
+        return AskResult("ok", reply=(proc.stdout or "").strip())
+
+    # No-op lifecycle methods so callers/watchdog treat it like a session.
+    def ensure_session(self) -> None:
+        return None
+
+    def is_healthy(self) -> bool:
+        return True
+
+    def current_state(self) -> PaneState:
+        return PaneState.READY
+
+    def force_recover(self) -> bool:
+        return True

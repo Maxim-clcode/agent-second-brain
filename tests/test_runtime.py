@@ -44,3 +44,16 @@ def test_explicit_session_name_used(tmp_path):
     rt.reset()
     s = _settings(tmp_path, brain_session_name="dbrain_fixed")
     assert rt.get_session(s).session_name == "dbrain_fixed"
+
+
+def test_router_mode_returns_router_session(tmp_path):
+    from d_brain.services.claude_session import RouterSession
+
+    rt.reset()
+    s = _settings(
+        tmp_path,
+        dbrain_mode="router",
+        anthropic_base_url="https://provider.example",
+        anthropic_auth_token="key",
+    )
+    assert isinstance(rt.get_session(s), RouterSession)
