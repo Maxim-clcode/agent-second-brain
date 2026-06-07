@@ -9,6 +9,10 @@
 # a first health check. Idempotent — safe to re-run.
 set -euo pipefail
 
+# Non-interactive SSH shells have a minimal PATH — make sure uv/claude/node
+# (in ~/.local/bin and nvm) are found.
+export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/$(ls "$HOME/.nvm/versions/node/" 2>/dev/null | tail -1)/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUNTIME_DIR="${DBRAIN_RUNTIME_DIR:-$HOME/.dbrain}"
 USER_UNITS="$HOME/.config/systemd/user"
