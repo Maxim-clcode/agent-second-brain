@@ -143,6 +143,50 @@ def test_ensure_session_raises_if_never_ready(tmp_path, clock):
         s.ensure_session()
 
 
+# ── sending (buffer) ─────────────────────────────────────────────────────
+
+
+def test_send_text_pipes_long_payload_via_stdin(tmp_path, clock):
+    """Regression: a long prompt must be streamed to `tmux load-buffer -` over
+    stdin, never passed as an argv element — argv data trips tmux's
+    `set-buffer: command too long` and the prompt is silently dropped."""
+    recorded: list[tuple[list[str], dict]] = []
+
+    def runner(args, **kwargs):
+        recorded.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    s = make_session(tmp_path, runner, clock)
+    big = "x" * 200_000
+    s._send_text(big)
+
+    loads = [
+        (a, k)
+        for (a, k) in recorded
+        if len(a) > 1 and a[1] in ("set-buffer", "load-buffer")
+    ]
+    assert loads, "expected a buffer-load tmux call"
+    args, kwargs = loads[0]
+    assert big not in args, "payload must not be passed as an argv element"
+    assert kwargs.get("input") == big, "payload must be piped via stdin"
+    assert args[1] == "load-buffer" and "-" in args
+
+
+def test_send_text_noop_on_empty(tmp_path, clock):
+    """`load-buffer -` of zero bytes creates no buffer, so a following
+    paste-buffer would fail `no buffer` — empty text must send nothing."""
+    recorded: list[list[str]] = []
+
+    def runner(args, **kwargs):
+        recorded.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    s = make_session(tmp_path, runner, clock)
+    s._send_text("")
+    subs = [a[1] for a in recorded if len(a) > 1 and a[0] == "tmux"]
+    assert "load-buffer" not in subs and "paste-buffer" not in subs
+
+
 # ── ask ─────────────────────────────────────────────────────────────────
 
 

@@ -122,9 +122,15 @@ class ClaudeSession:
 
     # ── tmux helpers ─────────────────────────────────────────────────
 
-    def _tmux(self, *args: str) -> subprocess.CompletedProcess:
+    def _tmux(
+        self, *args: str, input_text: str | None = None
+    ) -> subprocess.CompletedProcess:
         proc = self._runner(
-            ["tmux", *args], capture_output=True, text=True, check=False
+            ["tmux", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            input=input_text,
         )
         if proc.returncode != 0:
             logger.warning(
@@ -280,8 +286,13 @@ class ClaudeSession:
     # ── sending ──────────────────────────────────────────────────────
 
     def _send_text(self, text: str) -> None:
+        # Stream the payload to `load-buffer -` over stdin; passing it as an
+        # argv element trips tmux's "set-buffer: command too long" on long
+        # prompts and the text is silently dropped (session then stalls).
+        if not text:
+            return  # 0 bytes ⇒ no buffer ⇒ paste-buffer would fail `no buffer`
         buf = f"dbrain_{uuid.uuid4().hex[:6]}"
-        self._tmux("set-buffer", "-b", buf, text)
+        self._tmux("load-buffer", "-b", buf, "-", input_text=text)
         self._tmux("paste-buffer", "-t", self._target, "-b", buf, "-d")
         self._sleep(self._paste_settle)
 
