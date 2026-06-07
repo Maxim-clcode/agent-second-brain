@@ -1,0 +1,10 @@
+[Unit]
+Description=d-brain weekly digest
+OnFailure=dbrain-notify@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/dbrain
+ExecStart=%h/.local/bin/uv run python scripts/weekly.py
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CLAUDE_CONFIG_DIR=%h/.claude

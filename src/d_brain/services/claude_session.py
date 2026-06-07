@@ -204,6 +204,8 @@ class ClaudeSession:
             _PANE_HEIGHT,
             self._start_command(),
         )
+        # Bigger scrollback so long replies stay within capture range.
+        self._tmux("set-option", "-t", self.session_name, "history-limit", "50000")
         self._tmux(
             "pipe-pane",
             "-t",

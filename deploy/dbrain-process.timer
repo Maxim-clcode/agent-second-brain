@@ -1,5 +1,5 @@
 [Unit]
-Description=Run d-brain processing daily at 21:00
+Description=d-brain daily processing (21:00 local)
 
 [Timer]
 OnCalendar=*-*-* 21:00:00

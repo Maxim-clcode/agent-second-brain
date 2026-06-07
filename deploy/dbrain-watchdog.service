@@ -1,0 +1,22 @@
+[Unit]
+Description=d-brain watchdog (recovers a dead/hung Claude session)
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+OnFailure=dbrain-notify@%n.service
+
+[Service]
+Type=notify
+WatchdogSec=60
+# Separate slice so an OOM kill of the brain doesn't take the watchdog down.
+Slice=dbrain-watchdog.slice
+WorkingDirectory=%h/projects/dbrain
+ExecStart=%h/.local/bin/uv run python -m d_brain.services.watchdog
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+Environment=CLAUDE_CONFIG_DIR=%h/.claude
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
