@@ -61,4 +61,31 @@ TODO: ответы >~экрана читать из pane.log (сейчас captu
 - В рабочем дереве есть НЕ моё изменение `vault/.claude/CLAUDE.md` (правил пользователь) — НЕ включать в мои атомарные коммиты.
 
 ### TODO трекинг
-См. task list (TaskCreate) — Фаза 1, 13 задач.
+См. task list (TaskCreate) — Фаза 1, 15 задач.
+
+---
+
+## Статус реализации (2026-06-07)
+
+**Готово локально (12/15), 88 тестов зелёные, ruff чист, guard проходит, live e2e `ask()`→'PONG':**
+1. ✅ `tmux_parse.py` + `claude_session.py` (ядро, live-проверено)
+2. ✅ `deploy/brain-system.md` (контракт сессии)
+3. ✅ `processor.py` → session.ask (без claude -p)
+4. ✅ `runtime.py` singleton + хендлеры do/process/weekly + scripts/weekly.py
+5. ✅ `bot/main.py` ensure+sd_notify, `systemd_notify.py`
+6. ✅ `config.py` + `.env.example` (session/tz/escape-hatch)
+7. ✅ `pipeline.py` + `process.sh` shim (без claude -p)
+8. ✅ `watchdog.py` (state-based hang, дебаунс, deferred recovery)
+9. ✅ `doctor.py` (канарейка + локальные чеки)
+10. ✅ `bin/dbrain` CLI
+11. ✅ systemd units `dbrain-*` + timers + notify@ + tmux.conf (старые d-brain-* удалены)
+12. ✅ `RouterSession` escape-hatch + `escape-hatch.sh` + `check-no-claude-p.sh` guard
+14. ✅ `upgrade.sh` (миграция существующих установок)
+
+**Требуют разрешения пользователя (outward/необратимо):**
+13. ⏸ Деплой на VPS + e2e (нужен SSH-доступ; autonomy guardrail).
+15. ⏸ Один PR в main + bump v3.1 + GitHub release. ВАЖНО: ветка отстаёт от origin/main на 2 коммита (README rewrite + setup guide) — перед PR ребейз/мерж на origin/main. Bump version (pyproject 1.0.0→3.1.0, vault CLAUDE.md System Version 3.0→3.1) и README-секцию про tmux/биллинг/upgrade делать в этой фазе после ребейза.
+
+**Открытый блокер №1 (для Фазы 2 / go.sh свежей установки):** проверить, что `claude setup-token` авторизует ИНТЕРАКТИВНЫЙ путь, а не только -p. На своём VPS login уже есть, поэтому Фазу 1 не блокирует.
+
+**Не трогал:** `vault/.claude/CLAUDE.md` (несохранённые правки пользователя), `formatters.py` (откатил ruff drive-by).
