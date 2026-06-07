@@ -34,6 +34,18 @@
 - Вся работа — ОДИН PR из ветки в main. После зелёного e2e: bump v3.1 + GitHub release.
 - Отдельный upgrade-скрипт: обновление существующих установок одной командой (tmux+deps, миграция systemd d-brain-*→dbrain-*, рестарт). Задачи #14, #15.
 
+### Live integration findings (claude_session, claude 2.1.168) — баги, что моки не ловят
+1. `capture-pane -S -` и `-S -2000` → ПУСТО на tmux 3.6b; работает `-S -200` (вкл. scrollback).
+2. Терял `kill()` при рефакторе — вернул + тест.
+3. Trust-меню рисуется ВВЕРХУ экрана, низ пустой → classify искал в chrome(низ) → UNKNOWN. Фикс: trust по всему тексту (якорь на меню).
+4. Footer (`bypass permissions`/`❯`) НЕ в последних строках (низ экрана пуст) → READY по footer-якорю глобально.
+5. claude префиксует первую строку ответа `⏺ ` + отступы → маркер не line-start. Инвариант: маркер в КОНЦЕ строки (после него ничего), не в начале. Это и отличает ответ от inline-эхо.
+→ Итог: live e2e `ask()` → 'PONG'. pane height=50 (footer у низа), capture `-S -200`, target = имя сессии (не `:0.0`, иначе base-index ломает).
+TODO: ответы >~экрана читать из pane.log (сейчас capture -S -200).
+
+### CLAUDE.md (vault) — не трогаю
+В рабочем дереве несохранённые правки пользователя в `vault/.claude/CLAUDE.md`. Контракт сессии (маркеры/HTML/durable-memory) кладу в `deploy/brain-system.md` (--append-system-prompt, переживает compact). CLAUDE.md durable-state уже покрыт SESSION END PROTOCOL.
+
 ### Open questions (ответил сам)
 - Гранулярность записи памяти: выбрал «после фазы/запроса», не «после микрошага» — баланс надёжности и стоимости/шума.
 
