@@ -76,7 +76,7 @@ The archive tier is the interesting one. Occasionally, the agent pulls a random 
 
 Over time, note systems rot. Links break. Files become orphans. Tags diverge. You end up with a graveyard of markdown files that nobody, including you, can navigate.
 
-The vault-health system runs automatically:
+The vault health engine (autograph) runs automatically:
 
 - Scores your vault on a 100-point scale
 - Finds orphan notes (no links in or out) and suggests connections
@@ -197,23 +197,20 @@ vault/
 
 ## Skills
 
-The agent has four built-in skills:
+The agent has two built-in skills:
 
 | Skill | What it does |
 |-------|-------------|
 | **dbrain-processor** | Classifies entries, saves notes |
-| **agent-memory** | Ebbinghaus decay engine - remembers, forgets, recalls |
-| **vault-health** | Scores vault health, fixes links, generates MOCs |
-| **graph-builder** | Maps relationships between notes, finds clusters |
+| **autograph** | Typed vault engine: Ebbinghaus decay, graph health, MOCs, schema-as-code, dedup |
 
-Want just the memory engine? See [agent-memory-skill](https://github.com/smixs/agent-memory-skill) - works standalone, no dependencies.
+Want just the memory engine? See [autograph](https://github.com/smixs/autograph) - works standalone on any Obsidian vault, no dependencies.
 
 ## Configuration
 
 | File | What it controls |
 |------|-----------------|
 | `.env` | API tokens (copy from `.env.example`) |
-| `.memory-config.json` | How fast memories decay, tier boundaries |
 | `vault/.claude/CLAUDE.md` | Agent personality and rules |
 
 All secrets stay in `.env`, which is gitignored. Don't commit tokens.

@@ -2,7 +2,7 @@
 type: note
 description: Personal assistant for processing daily voice/text entries from Telegram. Classifies content, saves thoughts to Obsidian with wiki-links, generates HTML reports. Integrates Your Business context (clients, projects, CRM). Triggers on /process command or daily 21:00 cron.
 name: dbrain-processor
-depends_on: [graph-builder, agent-memory, vault-health]
+depends_on: [autograph]
 ---
 
 # d-brain Processor
@@ -556,4 +556,4 @@ grep -l "priority: High" business/crm/
 
 ## Relevant Skills
 
-- [[vault/.claude/skills/graph-builder/SKILL|graph-builder]] — Vault graph analysis
+- [[vault/.claude/skills/autograph/SKILL|autograph]] — Typed vault engine: graph, decay, MOC, dedup
