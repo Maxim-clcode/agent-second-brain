@@ -105,3 +105,66 @@ def test_tui_command_rejected_with_hint(monkeypatch):
 
     assert mgr.sent == []
     assert bot.messages and "attach" in bot.messages[0][1]
+
+
+# ── concurrent input: steer / interrupt / queue-as-ask ─────────────────────
+
+
+def test_classify_concurrent_input_modes():
+    from d_brain.bot.handlers.chat import classify_concurrent_input
+
+    assert classify_concurrent_input("привет", turn_active=False) == "ask"
+    assert classify_concurrent_input("пиши короче", turn_active=True) == "steer"
+    assert classify_concurrent_input("стоп", turn_active=True) == "interrupt"
+    assert classify_concurrent_input("/stop", turn_active=True) == "interrupt"
+    assert classify_concurrent_input("стоп", turn_active=False) == "ask"
+
+
+class SteerableManager(FakeManager):
+    def __init__(self, *, active=False):
+        super().__init__()
+        self.active = active
+        self.steered: list[str] = []
+        self.interrupts = 0
+
+    def is_turn_active(self) -> bool:
+        return self.active
+
+    async def steer(self, text: str) -> None:
+        self.steered.append(text)
+
+    async def interrupt(self) -> None:
+        self.interrupts += 1
+
+
+def test_plain_text_during_active_turn_steers(monkeypatch):
+    from d_brain.bot.handlers import chat
+
+    mgr = SteerableManager(active=True)
+    monkeypatch.setattr(chat, "_get_manager", lambda: mgr)
+    bot = FakeBot()
+    asyncio.run(chat._dispatch_text(bot, chat_id=10, user_id=1, text="пиши короче"))
+    assert mgr.steered == ["пиши короче"]
+    assert mgr.sent == []  # no new turn started
+
+
+def test_stop_word_interrupts_active_turn(monkeypatch):
+    from d_brain.bot.handlers import chat
+
+    mgr = SteerableManager(active=True)
+    monkeypatch.setattr(chat, "_get_manager", lambda: mgr)
+    bot = FakeBot()
+    asyncio.run(chat._dispatch_text(bot, chat_id=10, user_id=1, text="стоп"))
+    assert mgr.interrupts == 1
+    assert mgr.sent == [] and mgr.steered == []
+
+
+def test_text_when_idle_goes_to_normal_turn(monkeypatch):
+    from d_brain.bot.handlers import chat
+
+    mgr = SteerableManager(active=False)
+    monkeypatch.setattr(chat, "_get_manager", lambda: mgr)
+    bot = FakeBot()
+    asyncio.run(chat._dispatch_text(bot, chat_id=10, user_id=1, text="привет"))
+    assert mgr.sent == [(1, "привет")]
+    assert mgr.steered == []

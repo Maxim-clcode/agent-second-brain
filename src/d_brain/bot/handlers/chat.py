@@ -55,6 +55,20 @@ def classify_command(text: str) -> str:
     return "turn"
 
 
+_STOP_WORDS = {"/stop", "stop", "стоп"}
+
+
+def classify_concurrent_input(text: str, turn_active: bool) -> str:
+    """'ask' | 'steer' | 'interrupt' — what to do with input that arrives
+    while the agent may be busy. Plain text during an active turn STEERS it
+    (injected mid-turn); a stop word interrupts; otherwise a normal turn."""
+    if not turn_active:
+        return "ask"
+    if text.strip().lower() in _STOP_WORDS:
+        return "interrupt"
+    return "steer"
+
+
 def _get_manager() -> ChatSessionManager:
     """Lazy-init ChatSessionManager singleton."""
     global _manager  # noqa: PLW0603
@@ -78,6 +92,17 @@ async def _dispatch_text(bot: Bot, chat_id: int, user_id: int, text: str) -> Non
             "Эта команда открывает интерактивный интерфейс — доступно только "
             "через <code>dbrain attach</code> на сервере.",
         )
+        return
+
+    manager = _get_manager()
+    mode = classify_concurrent_input(text, manager.is_turn_active())
+    if mode == "interrupt":
+        await manager.interrupt()
+        await bot.send_message(chat_id, "⏹ Останавливаю текущий ответ.")
+        return
+    if mode == "steer":
+        await manager.steer(text)
+        await bot.send_message(chat_id, "↪️ Передал в текущую задачу.")
         return
     await _process_and_reply(bot, chat_id, user_id, text)
 

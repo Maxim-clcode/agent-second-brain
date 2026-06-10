@@ -55,6 +55,18 @@ class ChatSessionManager:
         async with get_ask_lock():
             await asyncio.to_thread(self._session.send_control, text)
 
+    # ── steering: deliberately NOT under the ask-lock — the lock is held by
+    # the in-flight turn these calls are aimed at.
+
+    def is_turn_active(self) -> bool:
+        return self._session.is_turn_active()
+
+    async def steer(self, text: str) -> None:
+        await asyncio.to_thread(self._session.steer, text)
+
+    async def interrupt(self) -> None:
+        await asyncio.to_thread(self._session.interrupt)
+
     def reset(self, user_id: int) -> None:
         """Clear the live session context (durable data in files is kept)."""
         self._session.clear()
