@@ -8,7 +8,7 @@
   <img alt="Agent Second Brain" src="https://github.com/user-attachments/assets/5b3611d9-11ba-40a1-92fc-8dc78d78d75b" />
 </p>
 
-**Send a voice note to Telegram. Get an organized knowledge base, completed tasks, and a daily report back.** That's it. That's the whole idea.
+**Send a voice note to Telegram. Get an organized knowledge base, scheduled reminders, and a daily report back.** That's it. That's the whole idea.
 
 [🇷🇺 Читать на русском](README.ru.md)
 
@@ -24,13 +24,14 @@ The real issue: organizing takes more effort than thinking. So the thinking neve
 
 ## What this actually does
 
-You talk to a Telegram bot. Voice, text, photos, forwarded messages - whatever is natural. You don't think about categories, tags, or where things go.
+You talk to a Telegram bot. Voice or text - whatever is natural. You don't think about categories, tags, or where things go.
 
 The agent handles everything else:
 
 - **Transcribes** your voice notes (Deepgram, takes seconds)
 - **Classifies** each entry - task, idea, client note, goal update, random thought
 - **Saves everything** to an Obsidian vault with proper links and tags
+- **Runs your routines** - "remind me in an hour", "every morning at 9 give me a brief" - it schedules its own cron jobs from plain language
 - **Sends you a daily report** at 9pm - what happened, what got done, what's still hanging
 - **Remembers what matters, forgets what doesn't** - memory fades over time like a real brain
 
@@ -92,8 +93,8 @@ You don't run maintenance. The agent does.
 |----------|-----------|
 | Voice note about a client call | Transcribes, creates CRM card with a follow-up |
 | Quick text: "idea for the Q2 campaign" | Saves to ideas folder, links to related notes |
-| Forwarded article from a chat | Saves with source, extracts key points |
-| Photo of a whiteboard | Saves with AI-generated description |
+| "Remind me about the call tomorrow at 3pm" | Creates a one-shot scheduled job, pings you in Telegram |
+| "Every weekday at 18:30 check my inbox folder" | Creates a recurring job that stays quiet when there's nothing new |
 | "Process" button | Runs the full pipeline right now |
 | "What are my priorities this week?" | Reads your goals, gives you a straight answer |
 
@@ -111,7 +112,7 @@ Each phase produces a clean JSON that the next phase picks up. If something brea
 Telegram → Deepgram → Claude Code → Obsidian vault → Telegram report
 ```
 
-**Always-on, on your subscription.** The bot doesn't spawn a fresh `claude` for every message. It keeps one long-lived *interactive* Claude Code session alive in a tmux pane and types your prompts into it. That keeps it on your Claude subscription (interactive usage) instead of per-request API billing. A watchdog and a daily self-check keep that session healthy around the clock and restart it automatically if it ever wedges — so the bot just stays up.
+**Always-on, on your subscription.** The bot doesn't spawn a fresh `claude` for every message. It keeps one long-lived *interactive* Claude Code session alive in a tmux pane and types your prompts into it. That keeps it on your Claude subscription (interactive usage) instead of per-request API billing. A watchdog and a daily self-check keep that session healthy around the clock and restart it automatically if it ever wedges — so the bot just stays up. Scheduled jobs fire in a second, isolated session, so a reminder going off never blocks your conversation.
 
 ## What it costs
 
@@ -181,7 +182,7 @@ cd agent-second-brain && bash upgrade.sh
 
 ```
 vault/
-├── daily/              # Your daily entries (voice, text, photos)
+├── daily/              # Your daily entries (voice, text)
 ├── goals/              # Vision → yearly → monthly → weekly
 ├── business/
 │   ├── crm/            # Client cards
@@ -197,12 +198,13 @@ vault/
 
 ## Skills
 
-The agent has two built-in skills:
+The agent has three built-in skills:
 
 | Skill | What it does |
 |-------|-------------|
 | **dbrain-processor** | Classifies entries, saves notes |
 | **autograph** | Typed vault engine: Ebbinghaus decay, graph health, MOCs, schema-as-code, dedup |
+| **cron** | The agent manages its own schedule: reminders, intervals, cron expressions - from plain language |
 
 Want just the memory engine? See [autograph](https://github.com/smixs/autograph) - works standalone on any Obsidian vault, no dependencies.
 
