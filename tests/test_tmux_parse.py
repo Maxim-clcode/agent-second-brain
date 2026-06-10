@@ -282,3 +282,24 @@ def test_classify_priority_stack_trust_first():
         " ❯\n"
     )
     assert classify_state(stacked) == PaneState.TRUST_PROMPT
+
+
+def test_extract_reply_works_for_skill_invocation_turn():
+    """Characterization: a /skill-name prompt is a NORMAL model turn — the
+    model honors the appended marker instruction, so the existing marker path
+    extracts the reply. No verbatim extractor is needed for skills."""
+    rid = "ab12cd34"
+    pane = (
+        "❯ /vault-note сохрани мысль про autograph\n"
+        "\n"
+        "  When done, wrap your ENTIRE reply between a line containing only "
+        f"<<<R:{rid}>>> and a line containing only <<<E:{rid}>>>.\n"
+        "\n"
+        f"⏺ <<<R:{rid}>>>\n"
+        "  Заметка сохранена: thoughts/ideas/autograph.md\n"
+        f"  <<<E:{rid}>>>\n"
+        "\n"
+        "❯\n"
+    )
+    assert is_complete(pane, rid)
+    assert extract_reply(pane, rid) == "Заметка сохранена: thoughts/ideas/autograph.md"
