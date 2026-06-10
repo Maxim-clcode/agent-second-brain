@@ -362,3 +362,52 @@ def test_ask_wrap_true_still_appends_markers(tmp_path, clock):
     res = s.ask("ping", timeout=30)
     assert res.ok and res.reply == "PONG"
     assert fake.texts and f"<<<R:{rid}>>>" in fake.texts[0]
+
+
+# ── steering: inject input into a LIVE turn (no exclusive lock) ─────────────
+
+
+def test_steer_sends_text_while_lock_is_held(tmp_path, clock):
+    """steer() must work WHILE an ask() holds the pane lock — it types into
+    the live turn, so it must not take the blocking lock (no deadlock)."""
+    import fcntl
+    import os
+
+    fake = FakeTmuxText([READY], exists=True)
+    s = make_session(tmp_path, fake, clock)
+    lock_fd = os.open(tmp_path / ".dbrain" / "pane.lock", os.O_CREAT | os.O_RDWR)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)  # simulate an in-flight ask()
+    try:
+        s.steer("уточнение: пиши короче")
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+    assert fake.texts and "уточнение" in fake.texts[0]
+    assert fake.enter_count() >= 1
+
+
+def test_interrupt_sends_escape(tmp_path, clock):
+    """interrupt() uses the TUI-native Escape (stops the current response);
+    C-c is reserved for the stall path (double C-c would begin app exit)."""
+    fake = FakeTmux([READY], exists=True)
+    s = make_session(tmp_path, fake, clock)
+    s.interrupt()
+    assert any(c[-1] == "Escape" for c in fake.sent_keys())
+    assert not any(c[-1] == "C-c" for c in fake.sent_keys())
+
+
+def test_is_turn_active_reflects_lock_state(tmp_path, clock):
+    import fcntl
+    import os
+
+    fake = FakeTmux([READY], exists=True)
+    s = make_session(tmp_path, fake, clock)
+    assert s.is_turn_active() is False  # lock free → no ask in flight
+
+    lock_fd = os.open(tmp_path / ".dbrain" / "pane.lock", os.O_CREAT | os.O_RDWR)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    try:
+        assert s.is_turn_active() is True
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
