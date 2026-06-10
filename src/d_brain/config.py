@@ -17,7 +17,6 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = Field(description="Telegram Bot API token")
     deepgram_api_key: str = Field(description="Deepgram API key for transcription")
-    todoist_api_key: str = Field(default="", description="Todoist API key for tasks")
     vault_path: Path = Field(
         default=Path("./vault"),
         description="Path to Obsidian vault directory",

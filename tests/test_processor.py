@@ -78,3 +78,15 @@ def test_generate_weekly_ok(tmp_path):
     r = p.generate_weekly()
     assert r["report"] == "<b>weekly</b>"
     assert sess.prompts
+
+
+def test_prompts_contain_no_todoist_references(tmp_path):
+    """v3.0: Todoist is removed; no prompt may instruct the agent to use it."""
+    (tmp_path / "daily").mkdir()
+    (tmp_path / "daily" / "2026-06-07.md").write_text("# d\n")
+    sess = FakeSession(AskResult("ok", reply="x"))
+    p = ClaudeProcessor(tmp_path, session=sess)
+    p.execute_prompt("сделай что-нибудь", user_id=0)
+    p.process_daily(date(2026, 6, 7))
+    joined = "\n".join(sess.prompts).lower()
+    assert "todoist" not in joined

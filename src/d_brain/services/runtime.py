@@ -73,7 +73,6 @@ def get_processor(settings: Settings) -> ClaudeProcessor:
     if _processor is None:
         _processor = ClaudeProcessor(
             settings.vault_path,
-            settings.todoist_api_key,
             session=get_session(settings),
         )
     return _processor

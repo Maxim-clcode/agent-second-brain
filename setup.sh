@@ -102,15 +102,6 @@ validate_deepgram_key() {
     return 1
 }
 
-validate_todoist_key() {
-    local key="$1"
-    # Todoist API token is alphanumeric, 40 chars
-    if [[ $key =~ ^[A-Za-z0-9]+$ ]] && [ ${#key} -ge 30 ]; then
-        return 0
-    fi
-    return 1
-}
-
 # =============================================================================
 # Check functions
 # =============================================================================
@@ -287,7 +278,6 @@ collect_tokens() {
     echo "  - Telegram Bot Token (from @BotFather)"
     echo "  - Your Telegram ID (from @userinfobot)"
     echo "  - Deepgram API Key (from console.deepgram.com)"
-    echo "  - Todoist API Token (from Todoist Settings > Integrations > Developer)"
     echo ""
 
     # Telegram Bot Token
@@ -325,18 +315,6 @@ collect_tokens() {
             error "Invalid API key format. Should be alphanumeric, 20+ characters"
         fi
     done
-
-    # Todoist API Token
-    while true; do
-        ask "Todoist API Token (from Settings > Integrations > Developer):"
-        read -r TODOIST_API_KEY
-        if validate_todoist_key "$TODOIST_API_KEY"; then
-            success "API Token format valid"
-            break
-        else
-            error "Invalid API token format. Should be alphanumeric, 30+ characters"
-        fi
-    done
 }
 
 create_env_file() {
@@ -359,9 +337,6 @@ TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
 
 # Deepgram API key for voice transcription
 DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY
-
-# Todoist API key for task management
-TODOIST_API_KEY=$TODOIST_API_KEY
 
 # Path to Obsidian vault directory
 VAULT_PATH=./vault

@@ -34,11 +34,9 @@ class ClaudeProcessor:
     def __init__(
         self,
         vault_path: Path,
-        todoist_api_key: str = "",
         session: ClaudeSession | None = None,
     ) -> None:
         self.vault_path = Path(vault_path)
-        self.todoist_api_key = todoist_api_key
         self.session = session
 
     # ── result mapping ───────────────────────────────────────────────
@@ -62,12 +60,6 @@ class ClaudeProcessor:
     def _load_skill_content(self) -> str:
         skill_path = self.vault_path / ".claude/skills/dbrain-processor/SKILL.md"
         return skill_path.read_text() if skill_path.exists() else ""
-
-    def _load_todoist_reference(self) -> str:
-        ref_path = (
-            self.vault_path / ".claude/skills/dbrain-processor/references/todoist.md"
-        )
-        return ref_path.read_text() if ref_path.exists() else ""
 
     def _get_session_context(self, user_id: int) -> str:
         if user_id == 0:
@@ -150,7 +142,6 @@ CRITICAL OUTPUT FORMAT:
 
     def execute_prompt(self, user_prompt: str, user_id: int = 0) -> dict[str, Any]:
         today = date.today()
-        todoist_ref = self._load_todoist_reference()
         session_context = self._get_session_context(user_id)
         prompt = f"""Ты - персональный ассистент d-brain.
 
@@ -158,11 +149,7 @@ CONTEXT:
 - Текущая дата: {today}
 - Vault path: {self.vault_path}
 
-{session_context}=== TODOIST REFERENCE ===
-{todoist_ref}
-=== END REFERENCE ===
-
-USER REQUEST:
+{session_context}USER REQUEST:
 {user_prompt}
 
 CRITICAL OUTPUT FORMAT:
@@ -174,7 +161,7 @@ CRITICAL OUTPUT FORMAT:
 
 EXECUTION:
 1. Analyze the request
-2. Call MCP tools directly (mcp__todoist__*, read/write files)
+2. Read/write vault files as needed
 3. Return HTML status report with results"""
         return self._ask(prompt)
 

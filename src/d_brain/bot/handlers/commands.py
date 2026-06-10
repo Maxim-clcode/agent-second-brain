@@ -45,7 +45,7 @@ async def cmd_help(message: Message) -> None:
         "3. Отправь фото — сохраню в attachments\n"
         "4. Перешли сообщение — сохраню с источником\n\n"
         "Вечером используй /process для обработки:\n"
-        "Мысли → Obsidian, Задачи → Todoist\n\n"
+        "Мысли → Obsidian\n\n"
         "<b>Команды:</b>\n"
         "/status - сколько записей сегодня\n"
         "/process - обработать записи\n"

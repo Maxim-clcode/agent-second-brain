@@ -115,7 +115,7 @@ Run daily processing via `/process` command or automatically at 21:00.
 
 ### 3-Phase Pipeline:
 1. **CAPTURE** — Read daily entries → classify → JSON
-2. **EXECUTE** — Create Todoist tasks, save thoughts, update CRM → JSON
+2. **EXECUTE** — Save thoughts, update CRM → JSON
 3. **REFLECT** — Generate HTML report, update MEMORY, record observations
 
 Each phase = fresh Claude context for better quality.
@@ -159,13 +159,11 @@ tier: active
 | `graph-builder` | Vault link analysis and building |
 | `vault-health` | Health scoring, MOC generation, link repair |
 | `agent-memory` | Card template, decay engine, tiered search |
-| `todoist-ai` | Todoist task management via MCP |
 
 - **Processing:** `.claude/skills/dbrain-processor/SKILL.md`
 - **Graph Builder:** `.claude/skills/graph-builder/SKILL.md`
 - **Vault Health:** `.claude/skills/vault-health/SKILL.md`
 - **Agent Memory:** `.claude/skills/agent-memory/SKILL.md`
-- **Todoist:** `.claude/skills/todoist-ai/SKILL.md`
 - **Rules:** `.claude/rules/` (daily, thoughts, goals, obsidian-markdown, weekly-reflection)
 - **Docs:** `.claude/docs/`
 

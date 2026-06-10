@@ -26,7 +26,7 @@ Is it actionable?
 └─ YES → Will it take < 2 minutes?
          ├─ YES → Do it now
          └─ NO → Is it a single action?
-                 ├─ YES → Schedule in Todoist
+                 ├─ YES → Schedule (task entry in vault)
                  └─ NO → Create project
 ```
 
@@ -46,10 +46,10 @@ Apply GTD decision tree:
 | Decision | Action |
 |----------|--------|
 | Do Now | Execute immediately, report done |
-| Schedule | Create task in Todoist |
-| Project | Create task + note in thoughts/projects/ |
+| Schedule | Add task entry to the daily note (## Tasks, with due date) |
+| Project | Create project note in thoughts/projects/ with next steps |
 | Reference | Save to thoughts/{category}/ |
-| Waiting | Create task with "waiting" label |
+| Waiting | Add "Waiting: …" entry to the daily note with follow-up date |
 | Trash | Mark for deletion |
 
 ### Step 3: Execute Actions
@@ -59,18 +59,15 @@ Apply GTD decision tree:
 - Report completion immediately
 
 **Schedule (single task):**
-```
-mcp__todoist__add-tasks
-  content: {task}
-  dueString: {date}
-  priority: {p1-p4}
+```markdown
+## Tasks
+- [ ] {task} (due: {date}, priority: {p1-p4})
 ```
 
 **Project (multi-step):**
-1. Create parent task in Todoist
-2. Add subtasks for first steps
-3. Create note in thoughts/projects/
-4. Link task and note
+1. Create note in thoughts/projects/ with goal + next steps
+2. Add the first step as a task entry in the daily note
+3. Link the project note from the daily note
 
 **Reference:**
 1. Classify: idea/learning/reflection
@@ -79,11 +76,9 @@ mcp__todoist__add-tasks
 4. Update MOC
 
 **Waiting:**
-```
-mcp__todoist__add-tasks
-  content: "Waiting: {description}"
-  labels: ["waiting"]
-  dueString: "in 3 days"  # follow-up
+```markdown
+## Tasks
+- [ ] Waiting: {description} (follow-up: in 3 days)
 ```
 
 **Trash:**

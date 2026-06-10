@@ -89,3 +89,17 @@ TODO: ответы >~экрана читать из pane.log (сейчас captu
 **Открытый блокер №1 (для Фазы 2 / go.sh свежей установки):** проверить, что `claude setup-token` авторизует ИНТЕРАКТИВНЫЙ путь, а не только -p. На своём VPS login уже есть, поэтому Фазу 1 не блокирует.
 
 **Не трогал:** `vault/.claude/CLAUDE.md` (несохранённые правки пользователя), `formatters.py` (откатил ruff drive-by).
+
+## 2026-06-10 — v3.0 S1: remove Todoist
+
+- Decision: blind review found todoist instructions deep in dbrain-processor prose
+  (SKILL.md body, phases/, references/) and rules/*.md. Triage: live paths removed
+  now (mcp-config.json deleted, processor/config/runtime code, todoist-ai skill,
+  goal-aligner agent, install.sh/setup.sh flows incl. whole install_mcp_cli);
+  skill PROSE deferred to T12 where dbrain-processor is rewritten for autograph
+  (avoids de-todoisting 600+ lines twice). weekly-digest.md dies in S3.
+  pyproject description — S6.
+- Gotcha: mcp-config.json's ONLY server was todoist → file deleted entirely
+  (runtime.py guards with mcp.exists()).
+- Gotcha: goal-aligner agent's sole purpose was todoist↔goals alignment → deleted,
+  not trimmed.

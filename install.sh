@@ -222,11 +222,11 @@ collect_tokens() {
     echo -e "${GREEN}║           TOKEN CONFIGURATION                  ║${NC}"
     echo -e "${GREEN}╚════════════════════════════════════════════════╝${NC}"
     echo
-    echo "You'll need to provide 4 tokens. Instructions for each below."
+    echo "You'll need to provide 3 tokens. Instructions for each below."
 
     # Telegram Bot Token
     prompt_token \
-        "1/4: Telegram Bot Token" \
+        "1/3: Telegram Bot Token" \
         "Create a bot via @BotFather in Telegram:
 1. Open Telegram and search for @BotFather
 2. Send /newbot
@@ -237,7 +237,7 @@ collect_tokens() {
 
     # Telegram User ID
     prompt_token \
-        "2/4: Your Telegram User ID" \
+        "2/3: Your Telegram User ID" \
         "Get your ID via @userinfobot:
 1. Search for @userinfobot in Telegram
 2. Send any message
@@ -247,24 +247,13 @@ collect_tokens() {
 
     # Deepgram API Key
     prompt_token \
-        "3/4: Deepgram API Key" \
+        "3/3: Deepgram API Key" \
         "For voice transcription (free \$200 credit):
 1. Sign up at console.deepgram.com
 2. Go to Settings → API Keys
 3. Create new key and copy it" \
         "https://console.deepgram.com/" \
         "DEEPGRAM_API_KEY"
-
-    # Todoist API Token (optional)
-    prompt_token \
-        "4/4: Todoist API Token (optional)" \
-        "For task management:
-1. Log in to todoist.com
-2. Settings → Integrations → Developer
-3. Copy the API token" \
-        "https://todoist.com/app/settings/integrations/developer" \
-        "TODOIST_API_KEY" \
-        "true"
 }
 
 #######################################
@@ -279,9 +268,6 @@ TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
 
 # Deepgram API Key (from console.deepgram.com)
 DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY
-
-# Todoist API Token (optional)
-TODOIST_API_KEY=$TODOIST_API_KEY
 
 # Path to vault (don't change)
 VAULT_PATH=./vault
@@ -301,40 +287,6 @@ install_python_deps() {
     cd "$INSTALL_DIR"
     uv sync
     success "Python dependencies installed"
-}
-
-#######################################
-# Install mcp-cli
-#######################################
-install_mcp_cli() {
-    if has_command mcp-cli; then
-        success "mcp-cli already installed"
-    else
-        info "Installing mcp-cli..."
-        curl -fsSL https://raw.githubusercontent.com/philschmid/mcp-cli/main/install.sh | bash
-        export PATH="$HOME/.local/bin:$PATH"
-        success "mcp-cli installed"
-    fi
-
-    # Configure mcp-cli for Todoist if token provided
-    if [[ -n "$TODOIST_API_KEY" ]]; then
-        info "Configuring mcp-cli for Todoist..."
-        mkdir -p ~/.config/mcp
-        cat > ~/.config/mcp/mcp_servers.json << EOF
-{
-  "mcpServers": {
-    "todoist": {
-      "command": "npx",
-      "args": ["-y", "@doist/todoist-ai"],
-      "env": {
-        "TODOIST_API_KEY": "$TODOIST_API_KEY"
-      }
-    }
-  }
-}
-EOF
-        success "mcp-cli configured"
-    fi
 }
 
 #######################################
@@ -516,7 +468,6 @@ main() {
     collect_tokens
     create_env
     install_python_deps
-    install_mcp_cli
     auth_claude
     setup_autostart
     start_bot

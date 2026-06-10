@@ -1,14 +1,13 @@
 ---
 type: note
-description: Personal assistant for processing daily voice/text entries from Telegram. Classifies content, creates Todoist tasks aligned with goals, saves thoughts to Obsidian with wiki-links, generates HTML reports. Integrates Your Business context (clients, projects, CRM). Triggers on /process command or daily 21:00 cron.
+description: Personal assistant for processing daily voice/text entries from Telegram. Classifies content, saves thoughts to Obsidian with wiki-links, generates HTML reports. Integrates Your Business context (clients, projects, CRM). Triggers on /process command or daily 21:00 cron.
 name: dbrain-processor
-allowed-tools: Bash(mcp-cli:*)
-depends_on: [graph-builder, todoist-ai, agent-memory, vault-health]
+depends_on: [graph-builder, agent-memory, vault-health]
 ---
 
 # d-brain Processor
 
-Process daily entries → tasks (Todoist) + thoughts (Obsidian) + HTML report (Telegram).
+Process daily entries → thoughts (Obsidian) + HTML report (Telegram).
 
 Integrates with Your Business data for business context.
 
@@ -31,65 +30,6 @@ WRONG:
 
 CORRECT:
 <b>Title</b>
-
-## Todoist через mcp-cli
-
-**ВСЕГДА используй mcp-cli для Todoist.** Не используй прямые MCP tools.
-
-### Базовые команды:
-
-```bash
-# Задачи на сегодня (проверка workload)
-mcp-cli call todoist find-tasks-by-date '{"startDate": "today"}'
-
-# Создать задачу
-mcp-cli call todoist add-tasks '{"tasks": [{"content": "Task", "dueString": "tomorrow", "priority": 2}]}'
-
-# Найти задачи по label
-mcp-cli call todoist find-tasks '{"labels": ["process-goal"]}'
-
-# Завершить задачи
-mcp-cli call todoist complete-tasks '{"ids": ["task_id"]}'
-
-# Обзор
-mcp-cli call todoist get-overview '{}'
-```
-
-### Приоритеты:
-- 1 = p1 (highest)
-- 2 = p2 (high)
-- 3 = p3 (medium)
-- 4 = p4 (default)
-
-## CRITICAL: mcp-cli Usage
-
-**СНАЧАЛА ВЫЗОВИ КОМАНДУ. ПОТОМ ДУМАЙ.**
-
-### Обязательный алгоритм:
-
-```
-1. ВЫЗОВИ: mcp-cli call todoist find-tasks-by-date '{"startDate": "today"}'
-   ↓
-   Получил результат? → Продолжай
-   ↓
-   Ошибка? → Читай файлы 30 секунд, потом ВЫЗОВИ СНОВА
-   ↓
-   3 ошибки подряд? → Покажи ТОЧНЫЙ текст ошибки
-```
-
-### ЗАПРЕЩЕНО:
-
-- ❌ "Todoist недоступен"
-- ❌ "mcp-cli не работает"
-- ❌ "добавь вручную"
-- ❌ Решать что не работает БЕЗ вызова команды
-
-### ОБЯЗАТЕЛЬНО:
-
-- ✅ ВЫЗВАТЬ команду через Bash
-- ✅ Если ошибка — подождать, вызвать снова
-- ✅ 3 retry перед любыми выводами
-- ✅ Показать task ID если создан
 
 ## Processing Flow
 
@@ -617,4 +557,3 @@ grep -l "priority: High" business/crm/
 ## Relevant Skills
 
 - [[vault/.claude/skills/graph-builder/SKILL|graph-builder]] — Vault graph analysis
-- [[vault/.claude/skills/todoist-ai/SKILL|todoist-ai]] — Todoist task management

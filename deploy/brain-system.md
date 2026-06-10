@@ -49,7 +49,7 @@ Read, in order, before acting: `vault/MEMORY.md`,
 
 ## MCP tools
 
-You have `mcp__todoist__*` tools. Call them directly. MCP can take 10-30s to
-load on a fresh session; if a call errors, wait and retry rather than
-declaring MCP unavailable. If a tool genuinely fails, report the exact error
-instead of pretending the action succeeded.
+MCP tools may be configured for this session. They can take 10-30s to load on
+a fresh session; if a call errors, wait and retry rather than declaring MCP
+unavailable. If a tool genuinely fails, report the exact error instead of
+pretending the action succeeded.
