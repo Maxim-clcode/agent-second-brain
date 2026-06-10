@@ -21,33 +21,33 @@ class FakeSession:
         return self.result
 
 
-def test_execute_prompt_returns_report_on_ok(tmp_path):
-    sess = FakeSession(AskResult("ok", reply="<b>done</b>"))
-    p = ClaudeProcessor(tmp_path, session=sess)
-    r = p.execute_prompt("move overdue tasks", user_id=0)
-    assert r["report"] == "<b>done</b>"
-    assert r["processed_entries"] == 1
-    assert sess.prompts and "move overdue tasks" in sess.prompts[0]
+def _daily(tmp_path):
+    (tmp_path / "daily").mkdir(exist_ok=True)
+    (tmp_path / "daily" / "2026-06-07.md").write_text("# d\n")
+    return date(2026, 6, 7)
 
 
-def test_execute_prompt_maps_rate_limited(tmp_path):
+def test_process_daily_maps_rate_limited(tmp_path):
+    day = _daily(tmp_path)
     sess = FakeSession(AskResult("rate_limited"))
     p = ClaudeProcessor(tmp_path, session=sess)
-    r = p.execute_prompt("x")
+    r = p.process_daily(day)
     assert "error" in r and r["processed_entries"] == 0
 
 
-def test_execute_prompt_maps_logged_out(tmp_path):
+def test_process_daily_maps_logged_out(tmp_path):
+    day = _daily(tmp_path)
     sess = FakeSession(AskResult("logged_out"))
     p = ClaudeProcessor(tmp_path, session=sess)
-    r = p.execute_prompt("x")
+    r = p.process_daily(day)
     assert "error" in r
 
 
-def test_execute_prompt_maps_timeout(tmp_path):
+def test_process_daily_maps_timeout(tmp_path):
+    day = _daily(tmp_path)
     sess = FakeSession(AskResult("timeout", detail="no reply"))
     p = ClaudeProcessor(tmp_path, session=sess)
-    r = p.execute_prompt("x")
+    r = p.process_daily(day)
     assert "error" in r
 
 
@@ -77,7 +77,6 @@ def test_prompts_contain_no_todoist_references(tmp_path):
     (tmp_path / "daily" / "2026-06-07.md").write_text("# d\n")
     sess = FakeSession(AskResult("ok", reply="x"))
     p = ClaudeProcessor(tmp_path, session=sess)
-    p.execute_prompt("сделай что-нибудь", user_id=0)
     p.process_daily(date(2026, 6, 7))
     joined = "\n".join(sess.prompts).lower()
     assert "todoist" not in joined

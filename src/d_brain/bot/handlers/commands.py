@@ -28,7 +28,6 @@ async def cmd_start(message: Message) -> None:
         "<b>Команды:</b>\n"
         "/status - статус сегодняшнего дня\n"
         "/process - обработать записи\n"
-        "/do - выполнить произвольный запрос\n"
         "/help - справка",
         reply_markup=get_main_keyboard(),
     )
@@ -47,9 +46,7 @@ async def cmd_help(message: Message) -> None:
         "Мысли → Obsidian\n\n"
         "<b>Команды:</b>\n"
         "/status - сколько записей сегодня\n"
-        "/process - обработать записи\n"
-        "/do - выполнить произвольный запрос\n\n"
-        "<i>Пример: /do перенеси просроченные задачи на понедельник</i>"
+        "/process - обработать записи"
     )
 
 

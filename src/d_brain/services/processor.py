@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from d_brain.services.claude_session import DEFAULT_TIMEOUT, AskResult, ClaudeSession
-from d_brain.services.session import SessionStore
 
 logger = logging.getLogger(__name__)
 
@@ -61,23 +60,6 @@ class ClaudeProcessor:
         skill_path = self.vault_path / ".claude/skills/dbrain-processor/SKILL.md"
         return skill_path.read_text() if skill_path.exists() else ""
 
-    def _get_session_context(self, user_id: int) -> str:
-        if user_id == 0:
-            return ""
-        session = SessionStore(self.vault_path)
-        today_entries = session.get_today(user_id)
-        if not today_entries:
-            return ""
-        lines = ["=== TODAY'S SESSION ==="]
-        for entry in today_entries[-10:]:
-            ts = entry.get("ts", "")[11:16]
-            entry_type = entry.get("type", "unknown")
-            text = entry.get("text", "")[:80]
-            if text:
-                lines.append(f"{ts} [{entry_type}] {text}")
-        lines.append("=== END SESSION ===\n")
-        return "\n".join(lines)
-
     # ── public operations ────────────────────────────────────────────
 
     def process_daily(self, day: date | None = None) -> dict[str, Any]:
@@ -101,29 +83,4 @@ CRITICAL OUTPUT FORMAT:
 - Start directly with 📊 <b>Обработка за {day}</b>
 - Allowed tags: <b>, <i>, <code>, <s>, <u>
 - If entries already processed, return status report in same HTML format"""
-        return self._ask(prompt)
-
-    def execute_prompt(self, user_prompt: str, user_id: int = 0) -> dict[str, Any]:
-        today = date.today()
-        session_context = self._get_session_context(user_id)
-        prompt = f"""Ты - персональный ассистент d-brain.
-
-CONTEXT:
-- Текущая дата: {today}
-- Vault path: {self.vault_path}
-
-{session_context}USER REQUEST:
-{user_prompt}
-
-CRITICAL OUTPUT FORMAT:
-- Return ONLY raw HTML for Telegram (parse_mode=HTML)
-- NO markdown: no **, no ##, no ```, no tables, no -
-- Start with emoji and <b>header</b>
-- Allowed tags: <b>, <i>, <code>, <s>, <u>
-- Be concise - Telegram has 4096 char limit
-
-EXECUTION:
-1. Analyze the request
-2. Read/write vault files as needed
-3. Return HTML status report with results"""
         return self._ask(prompt)
