@@ -1,14 +1,13 @@
 """Unified private chat handler with persistent Claude sessions.
 
 Voice + text only (v3.0): replaces the legacy split handlers for private chats.
-All messages are saved to daily (safety net) and routed through
-ChatSessionManager for Claude to process and respond.
+Every message is saved to daily (safety net) and routed IMMEDIATELY through
+ChatSessionManager for Claude to process and respond — no debounce buffer.
 """
 
 import asyncio
 import html
 import logging
-from dataclasses import dataclass, field
 from datetime import datetime
 
 from aiogram import Bot, F, Router
@@ -29,34 +28,11 @@ from d_brain.services.transcription import DeepgramTranscriber
 router = Router(name="chat")
 logger = logging.getLogger(__name__)
 
-# Only handle private chats — groups are handled by group.py
+# Only handle private chats
 router.message.filter(F.chat.type == ChatType.PRIVATE)
 
-DEBOUNCE_SECONDS = 5.0  # 5 sec debounce
 MAX_RESPONSE_LENGTH = 4096
 
-
-@dataclass
-class BufferedMessage:
-    """Single message in the debounce buffer."""
-
-    content: str
-    msg_type: str
-    timestamp: datetime
-
-
-@dataclass
-class DebounceBuffer:
-    """Per-chat debounce buffer."""
-
-    messages: list[BufferedMessage] = field(default_factory=list)
-    task: asyncio.Task[None] | None = None
-    chat_id: int = 0
-    user_id: int = 0
-
-
-# Module-level state
-_buffers: dict[int, DebounceBuffer] = {}
 _manager: ChatSessionManager | None = None
 
 
@@ -69,54 +45,9 @@ def _get_manager() -> ChatSessionManager:
     return _manager
 
 
-def _get_buffer(chat_id: int, user_id: int) -> DebounceBuffer:
-    """Get or create buffer for chat."""
-    if chat_id not in _buffers:
-        _buffers[chat_id] = DebounceBuffer(chat_id=chat_id, user_id=user_id)
-    return _buffers[chat_id]
-
-
-def _add_to_buffer(
-    chat_id: int, user_id: int, content: str, msg_type: str, bot: Bot
-) -> None:
-    """Add message to debounce buffer and reset timer."""
-    buf = _get_buffer(chat_id, user_id)
-    buf.messages.append(
-        BufferedMessage(
-            content=content,
-            msg_type=msg_type,
-            timestamp=datetime.now(),
-        )
-    )
-
-    # Cancel existing debounce task
-    if buf.task and not buf.task.done():
-        buf.task.cancel()
-
-    # Start new debounce task
-    buf.task = asyncio.create_task(_debounce_flush(chat_id, bot))
-
-
-async def _debounce_flush(chat_id: int, bot: Bot) -> None:
-    """Wait for debounce period, then flush buffer to Claude."""
-    try:
-        await asyncio.sleep(DEBOUNCE_SECONDS)
-    except asyncio.CancelledError:
-        return
-
-    buf = _buffers.get(chat_id)
-    if not buf or not buf.messages:
-        return
-
-    messages = buf.messages[:]
-    buf.messages.clear()
-    user_id = buf.user_id
-
-    prompt = _build_prompt(messages)
-
-    # Typing indicator loop
+async def _process_and_reply(bot: Bot, chat_id: int, user_id: int, prompt: str) -> None:
+    """Send the prompt to the shared session and deliver the reply."""
     typing_task = asyncio.create_task(_typing_loop(bot, chat_id))
-
     try:
         manager = _get_manager()
         response = await manager.send_message(user_id, prompt)
@@ -145,21 +76,6 @@ async def _debounce_flush(chat_id: int, bot: Bot) -> None:
             logger.exception("Failed to send error message")
     finally:
         typing_task.cancel()
-
-
-def _build_prompt(messages: list[BufferedMessage]) -> str:
-    """Combine buffered messages into a single prompt."""
-    if len(messages) == 1:
-        msg = messages[0]
-        if msg.msg_type == "text":
-            return msg.content
-        return f"[{msg.msg_type}] {msg.content}"
-
-    parts = []
-    for msg in messages:
-        time_str = msg.timestamp.strftime("%H:%M")
-        parts.append(f"[{time_str}] [{msg.msg_type}] {msg.content}")
-    return "\n".join(parts)
 
 
 async def _typing_loop(bot: Bot, chat_id: int) -> None:
@@ -263,9 +179,8 @@ async def handle_chat_voice(message: Message, bot: Bot) -> None:
             msg_id=message.message_id,
         )
 
-        # Add to debounce buffer
-        _add_to_buffer(
-            message.chat.id, message.from_user.id, transcript, "voice", bot
+        await _process_and_reply(
+            bot, message.chat.id, message.from_user.id, f"[voice] {transcript}"
         )
 
     except Exception as e:
@@ -295,7 +210,4 @@ async def handle_chat_text(message: Message, bot: Bot) -> None:
         msg_id=message.message_id,
     )
 
-    # Add to debounce buffer
-    _add_to_buffer(
-        message.chat.id, message.from_user.id, message.text, "text", bot
-    )
+    await _process_and_reply(bot, message.chat.id, message.from_user.id, message.text)

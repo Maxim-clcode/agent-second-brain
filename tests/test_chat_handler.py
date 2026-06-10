@@ -1,31 +1,47 @@
-"""Tests for the unified chat handler."""
+"""Tests for the unified chat handler (v3.0: immediate routing, no debounce)."""
 
 import asyncio
 
 
-def test_text_message_goes_through_debounce_buffer():
-    """Characterization (pre-v3 behavior): an incoming text lands in the
-    per-chat debounce buffer and schedules a delayed flush."""
+class FakeManager:
+    def __init__(self, reply="ответ"):
+        self.reply = reply
+        self.sent: list[tuple[int, str]] = []
+
+    async def send_message(self, user_id: int, prompt: str) -> str:
+        self.sent.append((user_id, prompt))
+        return self.reply
+
+
+class FakeBot:
+    def __init__(self):
+        self.messages: list[tuple[int, str]] = []
+
+    async def send_message(self, chat_id, text, **kwargs):
+        self.messages.append((chat_id, text))
+
+    async def send_chat_action(self, chat_id, action):
+        pass
+
+
+def test_text_message_routed_immediately(monkeypatch):
+    """v3.0: an incoming message reaches the session manager immediately —
+    no debounce buffer, no delayed flush."""
     from d_brain.bot.handlers import chat
 
-    async def run():
-        chat._buffers.clear()
-        chat._add_to_buffer(chat_id=10, user_id=1, content="привет", msg_type="text", bot=None)
-        buf = chat._buffers[10]
-        assert [m.content for m in buf.messages] == ["привет"]
-        assert buf.task is not None and not buf.task.done()
-        buf.task.cancel()
+    mgr = FakeManager(reply="<b>готово</b>")
+    monkeypatch.setattr(chat, "_get_manager", lambda: mgr)
+    bot = FakeBot()
 
-    asyncio.run(run())
+    asyncio.run(chat._process_and_reply(bot, chat_id=10, user_id=1, prompt="привет"))
+
+    assert mgr.sent == [(1, "привет")]
+    assert bot.messages and "готово" in bot.messages[0][1]
 
 
-def test_build_prompt_joins_buffered_messages():
-    from d_brain.bot.handlers.chat import BufferedMessage, _build_prompt
-    from datetime import datetime
+def test_no_debounce_infrastructure_left():
+    """The debounce buffer is fully removed."""
+    from d_brain.bot.handlers import chat
 
-    msgs = [
-        BufferedMessage("a", "text", datetime(2026, 6, 10, 10, 0)),
-        BufferedMessage("b", "voice", datetime(2026, 6, 10, 10, 1)),
-    ]
-    out = _build_prompt(msgs)
-    assert "a" in out and "b" in out and "[voice]" in out
+    for name in ("DEBOUNCE_SECONDS", "DebounceBuffer", "_add_to_buffer", "_debounce_flush", "_buffers"):
+        assert not hasattr(chat, name), f"zombie debounce symbol: {name}"
