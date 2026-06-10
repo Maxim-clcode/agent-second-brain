@@ -30,7 +30,6 @@ The agent handles everything else:
 
 - **Transcribes** your voice notes (Deepgram, takes seconds)
 - **Classifies** each entry - task, idea, client note, goal update, random thought
-- **Creates tasks** in Todoist with the right priority and due date
 - **Saves everything** to an Obsidian vault with proper links and tags
 - **Sends you a daily report** at 9pm - what happened, what got done, what's still hanging
 - **Remembers what matters, forgets what doesn't** - memory fades over time like a real brain
@@ -45,15 +44,15 @@ This isn't a button-pressing bot. You have a conversation.
 >
 > **Bot:** *finds and shows relevant entries*
 >
-> **You:** turn the second idea into a task for Monday
+> **You:** turn the second idea into a project note with next steps
 >
-> **Bot:** *creates the task in Todoist*
+> **Bot:** *creates the note, links it to related entries*
 >
-> **You:** actually make it high priority and add a subtask for the presentation
+> **You:** actually add a step for the presentation
 >
-> **Bot:** *updates the task*
+> **Bot:** *updates the note*
 
-It has access to your entire vault, all your goals, and your Todoist. Ask it anything about your own notes, and it'll find the answer.
+It has access to your entire vault and all your goals. Ask it anything about your own notes, and it'll find the answer.
 
 ## Memory that works like memory
 
@@ -91,25 +90,25 @@ You don't run maintenance. The agent does.
 
 | You send | Agent does |
 |----------|-----------|
-| Voice note about a client call | Transcribes, creates CRM card, adds follow-up task |
+| Voice note about a client call | Transcribes, creates CRM card with a follow-up |
 | Quick text: "idea for the Q2 campaign" | Saves to ideas folder, links to related notes |
 | Forwarded article from a chat | Saves with source, extracts key points |
 | Photo of a whiteboard | Saves with AI-generated description |
 | "Process" button | Runs the full pipeline right now |
-| "What are my priorities this week?" | Reads your goals and Todoist, gives you a straight answer |
+| "What are my priorities this week?" | Reads your goals, gives you a straight answer |
 
 ## How it works (for the curious)
 
 The daily processing runs in three phases:
 
 1. **Capture** - reads today's entries, classifies each one (task? idea? CRM update? goal progress?)
-2. **Execute** - creates Todoist tasks, writes vault files, updates cards
+2. **Execute** - writes vault files, updates cards
 3. **Reflect** - generates a summary report, updates long-term memory, sends it to Telegram
 
 Each phase produces a clean JSON that the next phase picks up. If something breaks, you can see exactly where and why.
 
 ```
-Telegram → Deepgram → Claude Code → Todoist + Obsidian vault → Telegram report
+Telegram → Deepgram → Claude Code → Obsidian vault → Telegram report
 ```
 
 **Always-on, on your subscription.** The bot doesn't spawn a fresh `claude` for every message. It keeps one long-lived *interactive* Claude Code session alive in a tmux pane and types your prompts into it. That keeps it on your Claude subscription (interactive usage) instead of per-request API billing. A watchdog and a daily self-check keep that session healthy around the clock and restart it automatically if it ever wedges — so the bot just stays up.
@@ -121,12 +120,11 @@ Telegram → Deepgram → Claude Code → Todoist + Obsidian vault → Telegram 
 | Claude Pro | $20/mo |
 | VPS (any cheap one works) | ~$5/mo |
 | Deepgram | Free tier ($200 credit) |
-| Todoist | Free plan works |
 | **Total** | **~$25/mo** |
 
 $25/month for a personal assistant that organizes your life, never sleeps, and gets better the more you use it.
 
-> **Why this matters (June 2026).** From June 15, 2026 Anthropic moves `claude -p` / headless runs onto a separate paid Agent SDK credit, billed per request. Agent Second Brain **v3.1** sidesteps that completely: it drives a persistent *interactive* session, which stays on your flat Pro/Max subscription. No per-request billing, no surprise invoice — the price above stays the price. (If you ever do want the API path, an opt-in `DBRAIN_MODE=router` escape hatch is built in.)
+> **Why this matters (June 2026).** From June 15, 2026 Anthropic moves `claude -p` / headless runs onto a separate paid Agent SDK credit, billed per request. Agent Second Brain **v3.0** sidesteps that completely: it drives a persistent *interactive* session, which stays on your flat Pro/Max subscription. No per-request billing, no surprise invoice — the price above stays the price.
 
 ## Quick start
 
@@ -149,14 +147,13 @@ Open these files and replace the placeholders:
 - `vault/.claude/skills/dbrain-processor/references/about.md` - tell the agent about yourself
 - `vault/.claude/skills/dbrain-processor/references/classification.md` - how you want entries sorted
 
-### 4. Get four API keys
+### 4. Get three API keys
 
 | What | Where | Time |
 |------|-------|------|
 | Telegram Bot Token | [@BotFather](https://t.me/BotFather) | 2 min |
 | Your Telegram ID | [@userinfobot](https://t.me/userinfobot) | 30 sec |
 | Deepgram API Key | [console.deepgram.com](https://console.deepgram.com/) | 3 min |
-| Todoist API Token | Todoist → Settings → Integrations → Developer | 1 min |
 
 ### 5. Deploy
 
@@ -200,15 +197,14 @@ vault/
 
 ## Skills
 
-The agent has five built-in skills:
+The agent has four built-in skills:
 
 | Skill | What it does |
 |-------|-------------|
-| **dbrain-processor** | Classifies entries, creates tasks, saves notes |
+| **dbrain-processor** | Classifies entries, saves notes |
 | **agent-memory** | Ebbinghaus decay engine - remembers, forgets, recalls |
 | **vault-health** | Scores vault health, fixes links, generates MOCs |
 | **graph-builder** | Maps relationships between notes, finds clusters |
-| **todoist-ai** | Manages tasks, projects, priorities |
 
 Want just the memory engine? See [agent-memory-skill](https://github.com/smixs/agent-memory-skill) - works standalone, no dependencies.
 
@@ -218,7 +214,6 @@ Want just the memory engine? See [agent-memory-skill](https://github.com/smixs/a
 |------|-----------------|
 | `.env` | API tokens (copy from `.env.example`) |
 | `.memory-config.json` | How fast memories decay, tier boundaries |
-| `mcp-config.json` | External tool connections |
 | `vault/.claude/CLAUDE.md` | Agent personality and rules |
 
 All secrets stay in `.env`, which is gitignored. Don't commit tokens.
