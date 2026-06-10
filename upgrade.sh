@@ -1,6 +1,6 @@
 #!/bin/bash
-# Upgrade an existing agent-second-brain install (v2 / v3.0) to the persistent
-# interactive-session architecture (v3.1) in one command:
+# Upgrade an existing agent-second-brain install (v1 / v2) to v3.0 — the
+# persistent interactive-session architecture — in one command:
 #
 #   bash upgrade.sh
 #
