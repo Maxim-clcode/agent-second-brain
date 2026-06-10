@@ -9,6 +9,7 @@ import asyncio
 import html
 import logging
 from datetime import datetime
+from typing import Any
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
@@ -150,6 +151,74 @@ async def _typing_loop(bot: Bot, chat_id: int) -> None:
         pass
 
 
+# --- Media input (photo / document / video / audio / animation / video_note) ---
+
+UNSUPPORTED_REPLY = (
+    "Я принимаю голос, текст, фото и файлы. "
+    "Этот тип сообщения обработать не могу."
+)
+
+_MEDIA_EXTRACTORS = (
+    # (kind, attr, default extension)
+    ("document", "document", None),
+    ("video", "video", "mp4"),
+    ("audio", "audio", "mp3"),
+    ("animation", "animation", "mp4"),
+    ("video_note", "video_note", "mp4"),
+)
+
+
+def extract_media(message: Any) -> tuple[str, str, str, str | None]:
+    """(kind, file_id, extension, original_name) for a media message.
+
+    Photos are a size ladder — take the largest. Documents/audio keep the
+    original file name (its extension wins over the default).
+    """
+    if getattr(message, "photo", None):
+        return ("photo", message.photo[-1].file_id, "jpg", None)
+    for kind, attr, default_ext in _MEDIA_EXTRACTORS:
+        obj = getattr(message, attr, None)
+        if obj is None:
+            continue
+        name = getattr(obj, "file_name", None)
+        ext = default_ext or "bin"
+        if name and "." in name:
+            ext = name.rsplit(".", 1)[-1].lower()
+        return (kind, obj.file_id, ext, name)
+    raise ValueError("message carries no known media")
+
+
+def forward_note(origin: Any) -> str:
+    """Human-readable forward attribution, or '' for a non-forward."""
+    if origin is None:
+        return ""
+    user = getattr(origin, "sender_user", None)
+    if user is not None:
+        return f"[переслано от: {user.full_name}]\n"
+    chat = getattr(origin, "chat", None)
+    if chat is not None:
+        return f"[переслано из: {chat.title}]\n"
+    name = getattr(origin, "sender_user_name", None)
+    if name:
+        return f"[переслано от: {name}]\n"
+    return "[переслано]\n"
+
+
+def build_media_prompt(
+    *, kind: str, rel_path: str, original_name: str | None, caption: str, fwd: str
+) -> str:
+    """Prompt for the brain: it lives in the vault and can Read the file
+    itself (images, PDFs, text) — we only hand it the path and context."""
+    name_part = f" (имя файла: {original_name})" if original_name else ""
+    caption_part = f"\nПодпись: {caption}" if caption else ""
+    return (
+        f"{fwd}Пользователь прислал {kind}: {rel_path}{name_part}{caption_part}\n"
+        "Прочитай файл (Read поддерживает изображения и PDF; для "
+        "видео/аудио опиши по подписи и контексту), сохрани суть в память "
+        "по правилам vault и кратко ответь, что сохранил."
+    )
+
+
 # --- Handlers ---
 
 
@@ -216,17 +285,85 @@ async def handle_chat_text(message: Message, bot: Bot) -> None:
     settings = get_settings()
     storage = VaultStorage(settings.vault_path)
 
+    fwd = forward_note(getattr(message, "forward_origin", None))
+    text = f"{fwd}{message.text}" if fwd else message.text
+
     # Safety net: save to daily
     timestamp = datetime.fromtimestamp(message.date.timestamp())
-    storage.append_to_daily(message.text, timestamp, "[text]")
+    storage.append_to_daily(text, timestamp, "[forward]" if fwd else "[text]")
 
     # Log to session
     session = SessionStore(settings.vault_path)
     session.append(
         message.from_user.id,
         "text",
-        text=message.text,
+        text=text,
         msg_id=message.message_id,
     )
 
-    await _dispatch_text(bot, message.chat.id, message.from_user.id, message.text)
+    await _dispatch_text(bot, message.chat.id, message.from_user.id, text)
+
+
+@router.message(
+    F.photo | F.document | F.video | F.audio | F.animation | F.video_note
+)
+async def handle_chat_media(message: Message, bot: Bot) -> None:
+    """Handle any file-bearing message: download into the vault's
+    attachments and hand the PATH to the brain — it reads the file itself."""
+    if not message.from_user:
+        return
+
+    settings = get_settings()
+    storage = VaultStorage(settings.vault_path)
+
+    try:
+        kind, file_id, ext, original_name = extract_media(message)
+        file = await bot.get_file(file_id)
+        if not file.file_path:
+            await message.answer("Не удалось скачать файл.")
+            return
+        file_bytes = await bot.download_file(file.file_path)
+        if not file_bytes:
+            await message.answer("Не удалось скачать файл.")
+            return
+
+        timestamp = datetime.fromtimestamp(message.date.timestamp())
+        rel_path = storage.save_attachment(
+            file_bytes.read(), timestamp.date(), timestamp, ext
+        )
+
+        caption = message.caption or ""
+        fwd = forward_note(getattr(message, "forward_origin", None))
+
+        # Safety net: save to daily with an Obsidian embed
+        daily_entry = f"{fwd}![[{rel_path}]]"
+        if caption:
+            daily_entry += f"\n\n{caption}"
+        storage.append_to_daily(daily_entry, timestamp, f"[{kind}]")
+
+        session = SessionStore(settings.vault_path)
+        session.append(
+            message.from_user.id,
+            kind,
+            text=caption or rel_path,
+            msg_id=message.message_id,
+        )
+
+        prompt = build_media_prompt(
+            kind=kind,
+            rel_path=rel_path,
+            original_name=original_name,
+            caption=caption,
+            fwd=fwd,
+        )
+        await _process_and_reply(bot, message.chat.id, message.from_user.id, prompt)
+
+    except Exception as e:
+        logger.exception("Error processing media in chat")
+        await message.answer(f"Error: {e}")
+
+
+@router.message()
+async def handle_chat_other(message: Message) -> None:
+    """Catch-all: never go silent — tell the user what the bot accepts."""
+    await message.answer(UNSUPPORTED_REPLY)

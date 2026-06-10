@@ -24,7 +24,7 @@ The real issue: organizing takes more effort than thinking. So the thinking neve
 
 ## What this actually does
 
-You talk to a Telegram bot. Voice or text - whatever is natural. You don't think about categories, tags, or where things go.
+You talk to a Telegram bot. Voice, text, photos, files, forwarded posts - whatever is natural. You don't think about categories, tags, or where things go.
 
 The agent handles everything else:
 
@@ -93,6 +93,7 @@ You don't run maintenance. The agent does.
 |----------|-----------|
 | Voice note about a client call | Transcribes, creates CRM card with a follow-up |
 | Quick text: "idea for the Q2 campaign" | Saves to ideas folder, links to related notes |
+| Forwarded post or a photo of a whiteboard | Saves the file to the vault, the agent reads it and files the takeaways |
 | "Remind me about the call tomorrow at 3pm" | Creates a one-shot scheduled job, pings you in Telegram |
 | "Every weekday at 18:30 check my inbox folder" | Creates a recurring job that stays quiet when there's nothing new |
 | "Process" button | Runs the full pipeline right now |
@@ -182,7 +183,7 @@ cd agent-second-brain && bash upgrade.sh
 
 ```
 vault/
-├── daily/              # Your daily entries (voice, text)
+├── daily/              # Your daily entries (voice, text, attachments)
 ├── goals/              # Vision → yearly → monthly → weekly
 ├── business/
 │   ├── crm/            # Client cards
