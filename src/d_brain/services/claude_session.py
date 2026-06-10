@@ -276,6 +276,31 @@ class ClaudeSession:
                 self._ready_flag.unlink(missing_ok=True)
                 self._inflight.unlink(missing_ok=True)
 
+    # ── steering (concurrent input into a live turn) ─────────────────
+
+    def steer(self, text: str) -> None:
+        """Type text into the pane WITHOUT taking the pane lock.
+
+        Used to inject guidance into an in-flight turn (the lock is held by
+        that turn's ask()). The interactive TUI feeds mid-turn input to the
+        model (steer/queue semantics) — VERIFY-LIVE per CLI version.
+        """
+        self._send_text(text)
+        self._send_enter()
+
+    def interrupt(self) -> None:
+        """Stop the current response (TUI-native Escape, no lock).
+
+        C-c is deliberately NOT used here: on an idle prompt a C-c starts the
+        double-C-c exit sequence; Escape only ever cancels the response.
+        """
+        self._tmux("send-keys", "-t", self._target, "Escape")
+
+    def is_turn_active(self) -> bool:
+        """True iff a turn is in flight (the pane lock is held)."""
+        with self._locked(blocking=False) as got:
+            return not got
+
     def send_control(self, text: str) -> None:
         """Type a client-side Claude Code command verbatim, fire-and-forget.
 
