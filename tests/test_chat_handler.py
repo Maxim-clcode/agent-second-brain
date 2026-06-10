@@ -170,3 +170,77 @@ def test_text_when_idle_goes_to_normal_turn(monkeypatch):
     asyncio.run(chat._dispatch_text(bot, chat_id=10, user_id=1, text="привет"))
     assert mgr.sent == [(1, "привет")]
     assert mgr.steered == []
+
+
+# ── media input: photo / document / video / audio (v3.0.x) ────────────────
+
+
+class _Stub:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def test_extract_media_photo_takes_largest():
+    from d_brain.bot.handlers.chat import extract_media
+
+    msg = _Stub(
+        photo=[_Stub(file_id="small"), _Stub(file_id="big")],
+        document=None, video=None, audio=None, animation=None, video_note=None,
+    )
+    kind, file_id, ext, name = extract_media(msg)
+    assert (kind, file_id, ext) == ("photo", "big", "jpg")
+
+
+def test_extract_media_document_keeps_name_and_ext():
+    from d_brain.bot.handlers.chat import extract_media
+
+    doc = _Stub(file_id="d1", file_name="report Q2.pdf")
+    msg = _Stub(photo=None, document=doc, video=None, audio=None,
+                animation=None, video_note=None)
+    kind, file_id, ext, name = extract_media(msg)
+    assert (kind, file_id, ext, name) == ("document", "d1", "pdf", "report Q2.pdf")
+
+
+def test_extract_media_video_note_is_mp4():
+    from d_brain.bot.handlers.chat import extract_media
+
+    msg = _Stub(photo=None, document=None, video=None, audio=None,
+                animation=None, video_note=_Stub(file_id="v1"))
+    kind, file_id, ext, name = extract_media(msg)
+    assert (kind, ext) == ("video_note", "mp4")
+
+
+def test_forward_note_variants():
+    from d_brain.bot.handlers.chat import forward_note
+
+    user = _Stub(sender_user=_Stub(full_name="Ivan Petrov"))
+    assert "Ivan Petrov" in forward_note(user)
+    channel = _Stub(sender_user=None, chat=_Stub(title="AI News"))
+    assert "AI News" in forward_note(channel)
+    hidden = _Stub(sender_user=None, chat=None, sender_user_name="Hidden Guy")
+    assert "Hidden Guy" in forward_note(hidden)
+    assert forward_note(None) == ""
+
+
+def test_build_media_prompt_contract():
+    from d_brain.bot.handlers.chat import build_media_prompt
+
+    p = build_media_prompt(
+        kind="document",
+        rel_path="attachments/2026-06-10/img-120000.pdf",
+        original_name="report.pdf",
+        caption="квартальный отчёт",
+        fwd="[переслано от: Ivan]\n",
+    )
+    assert "attachments/2026-06-10/img-120000.pdf" in p
+    assert "report.pdf" in p
+    assert "квартальный отчёт" in p
+    assert "Ivan" in p
+    # the brain must be told to actually open the file
+    assert "Read" in p or "прочитай" in p.lower() or "посмотри" in p.lower()
+
+
+def test_unsupported_content_reply_exists():
+    from d_brain.bot.handlers.chat import UNSUPPORTED_REPLY
+
+    assert "голос" in UNSUPPORTED_REPLY or "voice" in UNSUPPORTED_REPLY.lower()
