@@ -119,10 +119,35 @@ _STARTING_RE = re.compile(r"Claude Code v\d", re.I)
 # bypass footer is ALWAYS on screen under --dangerously-skip-permissions and
 # must never be used as an idle signal by itself.
 _WORKING_RE = re.compile(r"esc to interrupt")
+# Idle = a BARE ❯ on its own line (empty input). A menu selector ("❯ 1. Yes…")
+# has text after the chevron and must NOT count — otherwise a turn stuck on an
+# approval/menu prompt would be mistaken for completion (wrap=False).
+_IDLE_BARE_RE = re.compile(r"(?m)^\s*❯\s*$")
 
 
 def _chrome(text: str) -> str:
     return "\n".join(text.splitlines()[-_CHROME_LINES:])
+
+
+_CHROME_LINE_RE = re.compile(
+    r"^\s*❯?\s*$"               # empty / bare idle prompt
+    r"|^\s*─+\s*$"              # box rule
+    r"|bypass permissions on"   # always-present footer
+    r"|esc to interrupt"        # working spinner hint
+    r"|^\s*⏵⏵"                  # footer arrows
+    r"|^\s{2}\S.* \| .* \| "    # status line: "  name | model | path"
+)
+
+
+def strip_chrome(text: str) -> str:
+    """Best-effort body of a non-marker turn: drop TUI chrome lines.
+
+    Used for ``wrap=False`` turns where no marker pair exists; the result may
+    still contain the input echo — callers treat it as informational text,
+    not a structured reply.
+    """
+    kept = [ln for ln in text.splitlines() if not _CHROME_LINE_RE.search(ln)]
+    return "\n".join(kept).strip()
 
 
 def is_idle(text: str) -> bool:
@@ -138,7 +163,7 @@ def is_idle(text: str) -> bool:
     chrome = _chrome(text)
     if _WORKING_RE.search(chrome):
         return False
-    return bool(_IDLE_RE.search(chrome))
+    return bool(_IDLE_BARE_RE.search(chrome))
 
 
 def classify_state(text: str) -> PaneState:

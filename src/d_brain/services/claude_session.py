@@ -36,6 +36,8 @@ from d_brain.services.tmux_parse import (
     classify_state,
     extract_reply,
     is_complete,
+    is_idle,
+    strip_chrome,
 )
 
 logger = logging.getLogger(__name__)
@@ -296,9 +298,13 @@ class ClaudeSession:
         self._tmux("paste-buffer", "-t", self._target, "-b", buf, "-d")
         self._sleep(self._paste_settle)
 
-    def _send_prompt(self, prompt: str, rid: str) -> None:
+    def _send_prompt(self, prompt: str, rid: str, *, wrap: bool = True) -> None:
         # Markers are written INLINE (mid-sentence) so the input echo never
         # forms a line-anchored pair; only the model's answer does.
+        if not wrap:
+            self._send_text(prompt)
+            self._send_enter()
+            return
         payload = (
             f"{prompt}\n\n"
             f"When done, wrap your ENTIRE reply between a line containing only "
@@ -315,6 +321,7 @@ class ClaudeSession:
         *,
         timeout: float = DEFAULT_TIMEOUT,
         request_id: str | None = None,
+        wrap: bool = True,
     ) -> AskResult:
         """Send a prompt, return the model's reply (or a non-ok status).
 
@@ -323,6 +330,12 @@ class ClaudeSession:
         logged-out short-circuit, a frozen pane (stall) is interrupted, and a
         hard timeout returns a timeout status. request_id is for logging only;
         the marker rid is always freshly generated to avoid stale answers.
+
+        wrap=True (default) appends the marker instruction and extracts the
+        reply between the marker pair — the reliable path for model turns.
+        wrap=False types the prompt verbatim; completion is the pane sitting
+        idle for two consecutive polls and the reply is the chrome-stripped
+        pane text (best effort, may include the input echo).
         """
         rid = self._rid_factory()
         log_id = request_id or rid
@@ -342,11 +355,12 @@ class ClaudeSession:
                 return AskResult("logged_out")
 
             self._inflight.write_text(f"{log_id}\n{self._clock()}\n")
-            self._send_prompt(prompt, rid)
+            self._send_prompt(prompt, rid, wrap=wrap)
 
             last_live = self._liveness_fn()
             last_change = self._clock()
             deadline = self._clock() + timeout
+            idle_streak = 0
             while self._clock() < deadline:
                 cap = self._capture()
                 state = classify_state(cap)
@@ -356,9 +370,17 @@ class ClaudeSession:
                 if state == PaneState.LOGGED_OUT:
                     self._inflight.unlink(missing_ok=True)
                     return AskResult("logged_out")
-                if is_complete(cap, rid):
-                    self._inflight.unlink(missing_ok=True)
-                    return AskResult("ok", reply=extract_reply(cap, rid))
+                if wrap:
+                    if is_complete(cap, rid):
+                        self._inflight.unlink(missing_ok=True)
+                        return AskResult("ok", reply=extract_reply(cap, rid))
+                elif is_idle(cap):
+                    idle_streak += 1
+                    if idle_streak >= 2:
+                        self._inflight.unlink(missing_ok=True)
+                        return AskResult("ok", reply=strip_chrome(cap))
+                else:
+                    idle_streak = 0
 
                 live = self._liveness_fn()
                 if live != last_live:

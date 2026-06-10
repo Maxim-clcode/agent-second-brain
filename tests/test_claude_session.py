@@ -301,3 +301,55 @@ def test_kill_sends_kill_session(tmp_path, clock):
     assert "kill-session" in fake.sent_subcommands()
 
 
+
+
+# ── optional markers (wrap=False) + idle-based completion ──────────────────
+
+
+class FakeTmuxText(FakeTmux):
+    """FakeTmux that also records text streamed to load-buffer."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.texts: list[str] = []
+
+    def __call__(self, args, **kwargs):  # noqa: ANN001
+        if kwargs.get("input") is not None:
+            self.texts.append(kwargs["input"])
+        return super().__call__(args, **kwargs)
+
+
+def test_ask_wrap_false_does_not_append_marker_instruction(tmp_path, clock):
+    fake = FakeTmuxText([READY, THINKING, "ответ\n" + READY, "ответ\n" + READY], exists=True)
+    (tmp_path / ".dbrain").mkdir()
+    (tmp_path / ".dbrain" / "ready").touch()
+    s = make_session(tmp_path, fake, clock)
+    s.ask("/clear", timeout=30, wrap=False)
+    assert fake.texts, "prompt was not streamed to the pane"
+    assert "<<<R:" not in fake.texts[0]
+    assert "When done" not in fake.texts[0]
+
+
+def test_ask_wrap_false_completes_on_idle(tmp_path, clock):
+    fake = FakeTmuxText(
+        [READY, THINKING, THINKING, "ответ модели\n" + READY, "ответ модели\n" + READY],
+        exists=True,
+    )
+    (tmp_path / ".dbrain").mkdir()
+    (tmp_path / ".dbrain" / "ready").touch()
+    s = make_session(tmp_path, fake, clock)
+    res = s.ask("сделай дело", timeout=30, wrap=False)
+    assert res.ok, res
+    assert "ответ модели" in (res.reply or "")
+    assert "bypass permissions" not in (res.reply or "")
+
+
+def test_ask_wrap_true_still_appends_markers(tmp_path, clock):
+    rid = "rid00001"
+    fake = FakeTmuxText([READY, _complete(rid)], exists=True)
+    (tmp_path / ".dbrain").mkdir()
+    (tmp_path / ".dbrain" / "ready").touch()
+    s = make_session(tmp_path, fake, clock)
+    res = s.ask("ping", timeout=30)
+    assert res.ok and res.reply == "PONG"
+    assert fake.texts and f"<<<R:{rid}>>>" in fake.texts[0]

@@ -340,3 +340,17 @@ def test_is_idle_false_on_empty_pane():
     from d_brain.services.tmux_parse import is_idle
 
     assert not is_idle("")
+
+
+def test_is_idle_false_on_menu_selector():
+    """An interactive menu's selector (`❯ 1. Yes …`) is NOT an idle prompt —
+    only a bare ❯ (empty input line) counts. Guards wrap=False completion
+    against approval/menu prompts."""
+    from d_brain.services.tmux_parse import is_idle
+
+    pane = (
+        "Do you approve this plan?\n"
+        " ❯ 1. Yes, proceed\n   2. No, keep planning\n"
+        "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+    )
+    assert not is_idle(pane)
