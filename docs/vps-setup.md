@@ -110,7 +110,7 @@ uv --version
 
 ## Step 7: Install Node.js
 
-Required for MCP servers (Todoist integration):
+Required for Claude Code:
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
@@ -194,14 +194,6 @@ uv run python -c "import aiogram; print('aiogram OK')"
 3. Settings → API Keys
 4. Create key and copy
 
-### Todoist API Token (optional)
-
-1. Go to https://todoist.com/
-2. Settings → Integrations → Developer
-3. Copy API token
-
----
-
 ## Step 12: Configure Environment
 
 ```bash
@@ -213,7 +205,6 @@ Paste (replace with your values):
 ```bash
 TELEGRAM_BOT_TOKEN=7123456789:AAHdN8J2K4m5N6o7P8q9R0s1T2u3V4w5X6y
 DEEPGRAM_API_KEY=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0
-TODOIST_API_KEY=
 VAULT_PATH=./vault
 ALLOWED_USER_IDS=[123456789]
 ```
@@ -474,13 +465,6 @@ sudo journalctl -u d-brain-bot | grep -i error
 claude --version
 claude auth status
 claude auth login  # if needed
-```
-
-### Todoist not working
-
-```bash
-cat ~/projects/agent-second-brain/.env | grep TODOIST
-mcp-cli call todoist find-tasks-by-date '{"startDate": "today"}'
 ```
 
 ### Permission errors
