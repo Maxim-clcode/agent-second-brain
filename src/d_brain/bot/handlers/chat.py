@@ -14,11 +14,7 @@ from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
 from aiogram.types import Message
 
-from d_brain.bot.formatters import (
-    sanitize_telegram_html,
-    truncate_html,
-    validate_telegram_html,
-)
+from d_brain.bot.formatters import send_response
 from d_brain.config import get_settings
 from d_brain.services.chat_session import ChatSessionManager
 from d_brain.services.session import SessionStore
@@ -115,13 +111,13 @@ async def _process_and_reply(bot: Bot, chat_id: int, user_id: int, prompt: str) 
         response = await manager.send_message(user_id, prompt)
 
         if response:
-            await _send_response(bot, chat_id, response)
+            await send_response(bot, chat_id, response)
         else:
             logger.warning("Empty response from Claude for user %d, retrying...", user_id)
             # Retry once before giving up — don't reset session on first empty
             response = await manager.send_message(user_id, prompt)
             if response:
-                await _send_response(bot, chat_id, response)
+                await send_response(bot, chat_id, response)
             else:
                 logger.warning("Empty response after retry for user %d", user_id)
                 await bot.send_message(
@@ -148,54 +144,6 @@ async def _typing_loop(bot: Bot, chat_id: int) -> None:
             await asyncio.sleep(4)
     except asyncio.CancelledError:
         pass
-
-
-async def _send_response(bot: Bot, chat_id: int, text: str) -> None:
-    """Send response, splitting if too long for Telegram."""
-    sanitized = sanitize_telegram_html(text)
-    if not validate_telegram_html(sanitized):
-        sanitized = html.escape(text)
-
-    if len(sanitized) <= MAX_RESPONSE_LENGTH:
-        try:
-            await bot.send_message(chat_id, sanitized)
-        except Exception:
-            # Fallback: send without HTML
-            await bot.send_message(chat_id, sanitized, parse_mode=None)
-        return
-
-    # Split into chunks
-    chunks = _split_text(sanitized, MAX_RESPONSE_LENGTH)
-    for chunk in chunks:
-        try:
-            await bot.send_message(chat_id, chunk)
-        except Exception:
-            await bot.send_message(chat_id, chunk, parse_mode=None)
-        await asyncio.sleep(0.3)
-
-
-def _split_text(text: str, max_len: int) -> list[str]:
-    """Split text into chunks respecting Telegram limits."""
-    if len(text) <= max_len:
-        return [text]
-
-    chunks = []
-    remaining = text
-    while remaining:
-        if len(remaining) <= max_len:
-            chunks.append(remaining)
-            break
-        chunk = truncate_html(remaining, max_len)
-        chunks.append(chunk)
-        # Move past what we consumed
-        consumed = len(chunk.rstrip(".").rstrip())
-        if consumed == 0:
-            # Safety: force split to avoid infinite loop
-            chunks[-1] = remaining[:max_len]
-            remaining = remaining[max_len:]
-        else:
-            remaining = remaining[consumed:].lstrip()
-    return chunks
 
 
 # --- Handlers ---

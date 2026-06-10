@@ -1,9 +1,9 @@
 """Report formatters for Telegram messages."""
 
+import asyncio
 import html
 import re
 from typing import Any
-
 
 # Allowed HTML tags in Telegram
 ALLOWED_TAGS = {"b", "i", "code", "pre", "a", "s", "u"}
@@ -200,3 +200,50 @@ def format_empty_daily() -> str:
         "📭 <b>Нет записей для обработки</b>\n\n"
         "<i>Добавьте голосовые сообщения или текст в течение дня</i>"
     )
+
+
+# ── Telegram delivery (shared by chat handler and cron runner) ────────
+
+MAX_RESPONSE_LENGTH = 4096
+
+
+async def send_response(bot: Any, chat_id: int, text: str) -> None:
+    """Send a Claude reply: sanitize HTML, split to 4096-char chunks,
+    fall back to plain text when Telegram rejects the markup."""
+    sanitized = sanitize_telegram_html(text)
+    if not validate_telegram_html(sanitized):
+        sanitized = html.escape(text)
+
+    chunks = split_text(sanitized, MAX_RESPONSE_LENGTH)
+    for i, chunk in enumerate(chunks):
+        try:
+            await bot.send_message(chat_id, chunk)
+        except Exception:
+            # Fallback: send without HTML
+            await bot.send_message(chat_id, chunk, parse_mode=None)
+        if i < len(chunks) - 1:
+            await asyncio.sleep(0.3)
+
+
+def split_text(text: str, max_len: int) -> list[str]:
+    """Split text into chunks respecting Telegram limits."""
+    if len(text) <= max_len:
+        return [text]
+
+    chunks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_len:
+            chunks.append(remaining)
+            break
+        chunk = truncate_html(remaining, max_len)
+        chunks.append(chunk)
+        # Move past what we consumed
+        consumed = len(chunk.rstrip(".").rstrip())
+        if consumed == 0:
+            # Safety: force split to avoid infinite loop
+            chunks[-1] = remaining[:max_len]
+            remaining = remaining[max_len:]
+        else:
+            remaining = remaining[consumed:].lstrip()
+    return chunks
