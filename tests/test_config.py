@@ -32,3 +32,17 @@ def test_overrides_from_kwargs():
     s = _settings(claude_model="sonnet", tz="Asia/Tashkent")
     assert s.claude_model == "sonnet"
     assert s.tz == "Asia/Tashkent"
+
+
+def test_cron_fields_have_safe_defaults():
+    s = _settings()
+    assert s.cron_enabled is True
+    assert s.cron_tick_seconds == 60.0
+    assert s.cron_job_timeout == 600.0
+    assert s.cron_max_consecutive_errors == 3
+    assert s.cron_retry_seconds == 300.0
+
+
+def test_cron_dir_lives_under_runtime_dir():
+    s = _settings(runtime_dir=Path("/tmp/rt"))
+    assert s.cron_dir == Path("/tmp/rt/cron")

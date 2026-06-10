@@ -45,6 +45,33 @@ class Settings(BaseSettings):
     )
     tz: str = Field(default="UTC", description="Timezone for timers/reports")
 
+    # ── cron (scheduled jobs in the second brain session) ────────────
+    cron_enabled: bool = Field(
+        default=True,
+        description="Run the in-bot cron ticker",
+    )
+    cron_tick_seconds: float = Field(
+        default=60.0,
+        description="Ticker interval; jobs.json is re-read every tick",
+    )
+    cron_job_timeout: float = Field(
+        default=600.0,
+        description="Per-job ask() timeout in the cron session",
+    )
+    cron_max_consecutive_errors: int = Field(
+        default=3,
+        description="Consecutive failures before a job is auto-disabled",
+    )
+    cron_retry_seconds: float = Field(
+        default=300.0,
+        description="Retry delay for a failed one-shot ('at') job",
+    )
+
+    @property
+    def cron_dir(self) -> Path:
+        """Cron state dir: jobs.json + the cron session's runtime files."""
+        return self.runtime_dir / "cron"
+
     @property
     def admin_chat_id(self) -> int | None:
         """First allowed user — destination for health alerts / reports."""
