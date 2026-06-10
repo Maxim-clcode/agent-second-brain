@@ -114,10 +114,31 @@ _LOGGED_OUT_RE = re.compile(
 _FOOTER_RE = re.compile(r"bypass permissions on")
 _IDLE_RE = re.compile(r"(?m)^\s*❯")
 _STARTING_RE = re.compile(r"Claude Code v\d", re.I)
+# Active-turn marker. The TUI shows "(esc to interrupt)" next to its spinner
+# for the whole turn, so its absence + an idle ❯ is the idle signal. The
+# bypass footer is ALWAYS on screen under --dangerously-skip-permissions and
+# must never be used as an idle signal by itself.
+_WORKING_RE = re.compile(r"esc to interrupt")
 
 
 def _chrome(text: str) -> str:
     return "\n".join(text.splitlines()[-_CHROME_LINES:])
+
+
+def is_idle(text: str) -> bool:
+    """True iff the session sits at an idle input prompt (no active turn).
+
+    Unlike READY in classify_state (anchored on the always-present bypass
+    footer), this checks the chrome for an idle ``❯`` AND the absence of the
+    working spinner — usable as a turn-completion signal for prompts that
+    produce no marker pair.
+    """
+    if not text.strip():
+        return False
+    chrome = _chrome(text)
+    if _WORKING_RE.search(chrome):
+        return False
+    return bool(_IDLE_RE.search(chrome))
 
 
 def classify_state(text: str) -> PaneState:

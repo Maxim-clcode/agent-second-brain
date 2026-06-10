@@ -303,3 +303,40 @@ def test_extract_reply_works_for_skill_invocation_turn():
     )
     assert is_complete(pane, rid)
     assert extract_reply(pane, rid) == "Заметка сохранена: thoughts/ideas/autograph.md"
+
+
+# ── is_idle (turn-completion signal independent of the bypass footer) ──────
+
+_FOOTER = (
+    "────────────────────\n❯\n────────────────────\n"
+    "  hello | Opus 4.8 (1M context) | ~/p\n"
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+)
+_WORKING = "  ✻ Working…  (esc to interrupt)\n"
+
+
+def test_is_idle_true_on_empty_input_prompt():
+    from d_brain.services.tmux_parse import is_idle
+
+    assert is_idle("transcript above\n" + _FOOTER)
+
+
+def test_is_idle_false_while_working():
+    from d_brain.services.tmux_parse import is_idle
+
+    assert not is_idle("transcript\n" + _WORKING + _FOOTER)
+
+
+def test_is_idle_false_when_footer_present_but_thinking():
+    """The bypass footer is ALWAYS on screen under --dangerously-skip-
+    permissions, so it must never be treated as an idle signal by itself."""
+    from d_brain.services.tmux_parse import is_idle
+
+    pane = "long transcript\n" + _WORKING + "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+    assert not is_idle(pane)
+
+
+def test_is_idle_false_on_empty_pane():
+    from d_brain.services.tmux_parse import is_idle
+
+    assert not is_idle("")
