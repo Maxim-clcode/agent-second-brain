@@ -39,7 +39,7 @@ emit the closing `<<<E:ID>>>` marker:
 - Append a short entry to `vault/.session/handoff.md`: what was done, key
   decisions, and the next step.
 - Update `vault/MEMORY.md` only on a genuinely new decision, preference, or
-  fact via the agent-memory card format.
+  fact via the autograph card format.
 
 ## Bootstrap (on a fresh session)
 

@@ -47,7 +47,7 @@ if [ "$DAILY_SIZE" -lt 50 ]; then
 
     # Still rebuild graph and commit
     cd "$VAULT_DIR"
-    uv run .claude/skills/graph-builder/scripts/analyze.py || echo "Graph rebuild failed (non-critical)"
+    uv run .claude/skills/autograph/scripts/graph.py health . || echo "Graph rebuild failed (non-critical)"
     cd "$PROJECT_DIR"
 
     git add -A
@@ -93,11 +93,11 @@ REPORT_CLEAN=$(echo "$REPORT" | sed '/<!--/,/-->/d')
 # Rebuild vault graph (keeps structure up to date)
 echo "=== Rebuilding vault graph ==="
 cd "$VAULT_DIR"
-uv run .claude/skills/graph-builder/scripts/analyze.py || echo "Graph rebuild failed (non-critical)"
+uv run .claude/skills/autograph/scripts/graph.py health . || echo "Graph rebuild failed (non-critical)"
 
 # Memory decay (update relevance scores and tiers)
 echo "=== Memory decay ==="
-uv run .claude/skills/agent-memory/scripts/memory-engine.py decay . || echo "Memory decay failed (non-critical)"
+uv run .claude/skills/autograph/scripts/engine.py decay . || echo "Memory decay failed (non-critical)"
 cd "$PROJECT_DIR"
 
 # Git commit
