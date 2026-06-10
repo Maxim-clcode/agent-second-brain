@@ -9,20 +9,23 @@ just avoids piling up blocked worker threads).
 
 import asyncio
 import uuid
+from pathlib import Path
 
 from d_brain.config import Settings
 from d_brain.services.claude_session import ClaudeSession
 from d_brain.services.processor import ClaudeProcessor
 
 _session: ClaudeSession | None = None
+_cron_session: ClaudeSession | None = None
 _processor: ClaudeProcessor | None = None
 _ask_lock = asyncio.Lock()
 
 
 def reset() -> None:
     """Drop the singletons (tests only)."""
-    global _session, _processor
+    global _session, _cron_session, _processor
     _session = None
+    _cron_session = None
     _processor = None
 
 
@@ -40,11 +43,9 @@ def _persisted_name(settings: Settings) -> str:
     return name
 
 
-def get_session(settings: Settings) -> ClaudeSession:
-    """Return the shared interactive ClaudeSession singleton."""
-    global _session
-    if _session is not None:
-        return _session
+def _build_session(
+    settings: Settings, *, session_name: str, runtime_dir: Path
+) -> ClaudeSession:
     project_root = settings.vault_path.parent
     mcp = project_root / "mcp-config.json"
     brain_prompt = project_root / "deploy" / "brain-system.md"
@@ -58,15 +59,43 @@ def get_session(settings: Settings) -> ClaudeSession:
             f"persona file missing or invalid: {brain_prompt} — "
             "refusing to start a personality-less brain"
         )
-    _session = ClaudeSession(
-        session_name=_persisted_name(settings),
+    return ClaudeSession(
+        session_name=session_name,
         work_dir=settings.vault_path,
-        runtime_dir=settings.runtime_dir,
+        runtime_dir=runtime_dir,
         mcp_config=mcp if mcp.exists() else None,
         system_prompt_file=brain_prompt,
         model=settings.claude_model or None,
     )
+
+
+def get_session(settings: Settings) -> ClaudeSession:
+    """Return the shared interactive ClaudeSession singleton."""
+    global _session
+    if _session is None:
+        _session = _build_session(
+            settings,
+            session_name=_persisted_name(settings),
+            runtime_dir=settings.runtime_dir,
+        )
     return _session
+
+
+def get_cron_session(settings: Settings) -> ClaudeSession:
+    """Return the cron brain — a second, isolated ClaudeSession.
+
+    Same persona and vault as the main brain, but its own tmux session and
+    its own runtime dir (pane.lock / pane.log / ready), so scheduled jobs
+    never block or pollute the user's conversation.
+    """
+    global _cron_session
+    if _cron_session is None:
+        _cron_session = _build_session(
+            settings,
+            session_name=f"{_persisted_name(settings)}_cron",
+            runtime_dir=settings.cron_dir,
+        )
+    return _cron_session
 
 
 def get_processor(settings: Settings) -> ClaudeProcessor:
