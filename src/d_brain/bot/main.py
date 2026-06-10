@@ -12,6 +12,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Update
 
 from d_brain.config import Settings
+from d_brain.services.cron_runner import run_cron
 from d_brain.services.runtime import get_session
 from d_brain.services.systemd_notify import notify, watchdog_interval
 
@@ -110,10 +111,15 @@ async def run_bot(settings: Settings) -> None:
 
     notify("READY=1")
     pinger = asyncio.create_task(_watchdog_pinger())
+    cron_task = (
+        asyncio.create_task(run_cron(settings, bot)) if settings.cron_enabled else None
+    )
 
     logger.info("Starting bot polling...")
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         pinger.cancel()
+        if cron_task is not None:
+            cron_task.cancel()
         await bot.session.close()

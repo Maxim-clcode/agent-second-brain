@@ -11,7 +11,7 @@ import argparse
 import os
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from d_brain.services.cron_store import (
@@ -77,7 +77,7 @@ def _fmt_schedule(job: CronJob) -> str:
 
 def _cmd_add(args: argparse.Namespace) -> int:
     store = CronStore(Path(args.dir))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     schedule = parse_schedule(
         at=args.at, every=args.every, cron=args.cron, tz=args.tz, default_tz=args.tz
     )
@@ -141,7 +141,7 @@ def _cmd_remove(args: argparse.Namespace) -> int:
 
 def _cmd_enable(args: argparse.Namespace) -> int:
     store = CronStore(Path(args.dir))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     def fix(jobs: list[CronJob]) -> None:
         job = _find(jobs, args.job_id)

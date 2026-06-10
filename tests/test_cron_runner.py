@@ -1,0 +1,259 @@
+"""Tests for the cron runner: ticker semantics, delivery, self-healing.
+
+FakeSession pattern as in test_claude_session.py — no tmux, scripted
+AskResults, recorder callables for deliver/alert, a manual clock.
+"""
+
+from datetime import datetime, timedelta, timezone
+
+from d_brain.services.claude_session import AskResult
+from d_brain.services.cron_runner import SILENT_MARKER, CronRunner, wrap_job_prompt
+from d_brain.services.cron_store import CronJob, CronStore, Schedule
+
+NOW = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+
+
+class FakeSession:
+    def __init__(self, results=None, on_ask=None):
+        self.results = list(results or [])
+        self.on_ask = on_ask
+        self.asked: list[str] = []
+        self.controls: list[str] = []
+        self.recovered = 0
+
+    def ask(self, prompt, *, timeout=0.0, wrap=True):
+        self.asked.append(prompt)
+        if self.on_ask:
+            self.on_ask()
+        return self.results.pop(0) if self.results else AskResult("ok", reply="done")
+
+    def send_control(self, text):
+        self.controls.append(text)
+
+    def force_recover(self):
+        self.recovered += 1
+        return True
+
+
+class Recorder:
+    def __init__(self):
+        self.calls = []
+
+    async def __call__(self, *args):
+        self.calls.append(args)
+
+
+def _store(tmp_path):
+    return CronStore(tmp_path / "cron")
+
+
+def _add_job(store, job_id="j1", *, kind="every", next_run=NOW, **over):
+    if kind == "every":
+        schedule = Schedule(kind="every", every_seconds=3600)
+    elif kind == "at":
+        schedule = Schedule(kind="at", at=next_run.isoformat())
+    else:
+        schedule = Schedule(kind="cron", expr="0 9 * * *", tz="UTC")
+    base = dict(id=job_id, prompt="do it", schedule=schedule)
+    base.update(over)
+    job = CronJob(**base)
+    job.state.next_run = next_run.isoformat()
+    store.mutate(lambda jobs: jobs.append(job))
+    return job
+
+
+def _runner(store, session, *, deliver=None, alert=None, clock=None, **over):
+    base = dict(
+        deliver=deliver or Recorder(),
+        alert=alert or Recorder(),
+        default_chat_id=111,
+        job_timeout=10.0,
+        max_consecutive_errors=3,
+        retry_seconds=300.0,
+        clock=clock or (lambda: NOW),
+    )
+    base.update(over)
+    return CronRunner(store, session, **base)
+
+
+# ── ticker semantics ─────────────────────────────────────────────────
+
+
+async def test_due_job_runs_and_delivers(tmp_path):
+    store = _store(tmp_path)
+    _add_job(store, "j1")
+    deliver = Recorder()
+    session = FakeSession([AskResult("ok", reply="<b>done</b>")])
+    await _runner(store, session, deliver=deliver).tick()
+    assert len(session.asked) == 1
+    assert "do it" in session.asked[0]
+    assert deliver.calls == [(111, "<b>done</b>")]
+
+
+async def test_future_and_disabled_jobs_skipped(tmp_path):
+    store = _store(tmp_path)
+    _add_job(store, "future", next_run=NOW + timedelta(hours=1))
+    _add_job(store, "off", enabled=False)
+    session = FakeSession()
+    await _runner(store, session).tick()
+    assert session.asked == []
+
+
+async def test_next_run_persisted_before_ask(tmp_path):
+    """At-most-once: a crash mid-ask must not refire the same slot."""
+    store = _store(tmp_path)
+    _add_job(store, "j1")
+    seen = {}
+
+    def snapshot():
+        seen["next_run"] = store.load()[0].state.next_run
+
+    session = FakeSession([AskResult("ok", reply="x")], on_ask=snapshot)
+    await _runner(store, session).tick()
+    assert seen["next_run"] == (NOW + timedelta(hours=1)).isoformat()
+
+
+async def test_every_job_reschedules_after_run(tmp_path):
+    store = _store(tmp_path)
+    _add_job(store, "j1")
+    await _runner(store, FakeSession([AskResult("ok", reply="x")])).tick()
+    job = store.load()[0]
+    assert job.state.next_run == (NOW + timedelta(hours=1)).isoformat()
+    assert job.state.last_status == "ok"
+    assert job.state.last_run == NOW.isoformat()
+
+
+async def test_hot_reload_picks_up_jobs_added_between_ticks(tmp_path):
+    store = _store(tmp_path)
+    session = FakeSession([AskResult("ok", reply="x")])
+    runner = _runner(store, session)
+    await runner.tick()
+    assert session.asked == []
+    _add_job(store, "late")  # e.g. brain CLI while the bot is running
+    await runner.tick()
+    assert len(session.asked) == 1
+
+
+# ── delivery ─────────────────────────────────────────────────────────
+
+
+async def test_job_chat_id_overrides_default(tmp_path):
+    store = _store(tmp_path)
+    _add_job(store, "j1", chat_id=999)
+    deliver = Recorder()
+    await _runner(
+        store, FakeSession([AskResult("ok", reply="x")]), deliver=deliver
+    ).tick()
+    assert deliver.calls == [(999, "x")]
+
+
+async def test_silent_reply_suppresses_delivery(tmp_path):
+    store = _store(tmp_path)
+    _add_job(store, "j1")
+    deliver = Recorder()
+    reply = f"{SILENT_MARKER} nothing new"
+    await _runner(
+        store, FakeSession([AskResult("ok", reply=reply)]), deliver=deliver
+    ).tick()
+    assert deliver.calls == []
+    assert store.load()[0].state.last_status == "ok-silent"
+
+
+async def test_clear_sent_after_successful_run(tmp_path):
+    store = _store(tmp_path)
+    _add_job(store, "j1")
+    session = FakeSession([AskResult("ok", reply="x")])
+    await _runner(store, session).tick()
+    assert "/clear" in session.controls
+
+
+# ── one-shot lifecycle ───────────────────────────────────────────────
+
+
+async def test_oneshot_deleted_after_success(tmp_path):
+    store = _store(tmp_path)
+    _add_job(store, "once", kind="at", delete_after_run=True)
+    await _runner(store, FakeSession([AskResult("ok", reply="x")])).tick()
+    assert store.load() == []
+
+
+async def test_oneshot_error_kept_with_retry(tmp_path):
+    store = _store(tmp_path)
+    _add_job(store, "once", kind="at", delete_after_run=True)
+    await _runner(store, FakeSession([AskResult("timeout")])).tick()
+    jobs = store.load()
+    assert len(jobs) == 1
+    assert jobs[0].state.next_run == (NOW + timedelta(seconds=300)).isoformat()
+    assert jobs[0].state.last_status == "timeout"
+
+
+# ── self-healing ─────────────────────────────────────────────────────
+
+
+async def test_error_recovers_session_and_counts(tmp_path):
+    store = _store(tmp_path)
+    _add_job(store, "j1")
+    session = FakeSession([AskResult("error", detail="boom")])
+    await _runner(store, session).tick()
+    assert session.recovered == 1
+    job = store.load()[0]
+    assert job.state.consecutive_errors == 1
+    assert job.state.last_error == "boom"
+    assert job.enabled is True
+
+
+async def test_third_consecutive_error_disables_and_alerts(tmp_path):
+    store = _store(tmp_path)
+    _add_job(store, "j1")
+
+    def set_errors(jobs):
+        jobs[0].state.consecutive_errors = 2
+
+    store.mutate(set_errors)
+    alert = Recorder()
+    await _runner(store, FakeSession([AskResult("error")]), alert=alert).tick()
+    job = store.load()[0]
+    assert job.enabled is False
+    assert job.state.consecutive_errors == 3
+    assert len(alert.calls) == 1
+    assert "j1" in alert.calls[0][0]
+
+
+async def test_success_resets_error_counter(tmp_path):
+    store = _store(tmp_path)
+    _add_job(store, "j1")
+
+    def set_errors(jobs):
+        jobs[0].state.consecutive_errors = 2
+
+    store.mutate(set_errors)
+    await _runner(store, FakeSession([AskResult("ok", reply="x")])).tick()
+    assert store.load()[0].state.consecutive_errors == 0
+
+
+async def test_rate_limited_skips_without_recover_or_count(tmp_path):
+    """Subscription limit is not the job's fault: wait for the next slot."""
+    store = _store(tmp_path)
+    _add_job(store, "j1")
+    session = FakeSession([AskResult("rate_limited")])
+    await _runner(store, session).tick()
+    job = store.load()[0]
+    assert session.recovered == 0
+    assert job.state.consecutive_errors == 0
+    assert job.state.last_status == "rate_limited"
+    assert "/clear" not in session.controls
+
+
+# ── prompt wrapper ───────────────────────────────────────────────────
+
+
+def test_wrap_job_prompt_contract():
+    wrapped = wrap_job_prompt("j1", "check the inbox", scheduled_for="2026-06-10")
+    assert "[CRON JOB j1]" in wrapped
+    assert "check the inbox" in wrapped
+    assert "2026-06-10" in wrapped
+    assert SILENT_MARKER in wrapped
+    # recursion guard: a scheduled run must not breed more jobs
+    assert "d_brain.cron" in wrapped
+    # marker instruction belongs to ask(wrap=True), never duplicated here
+    assert "<<<R:" not in wrapped
