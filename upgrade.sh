@@ -52,6 +52,9 @@ mkdir -p "$USER_UNITS"
 systemctl --user disable --now \
     d-brain-bot.service d-brain-process.timer d-brain-weekly.timer 2>/dev/null || true
 rm -f "$USER_UNITS"/d-brain-*.service "$USER_UNITS"/d-brain-*.timer
+# v3.0 migration: the weekly digest is removed — retire its units on upgrade.
+systemctl --user disable --now dbrain-weekly.timer dbrain-weekly.service 2>/dev/null || true
+rm -f "$USER_UNITS"/dbrain-weekly.service "$USER_UNITS"/dbrain-weekly.timer
 # Install new units, pointing WorkingDirectory/ExecStart at the real path.
 for f in "$PROJECT_DIR"/deploy/dbrain-*.service "$PROJECT_DIR"/deploy/dbrain-*.timer; do
     sed "s|%h/projects/dbrain|$PROJECT_DIR|g" "$f" > "$USER_UNITS/$(basename "$f")"
@@ -60,12 +63,12 @@ systemctl --user daemon-reload
 loginctl enable-linger "$USER" 2>/dev/null || echo "  ⚠ could not enable linger (services won't start on boot without it)"
 systemctl --user enable \
     dbrain-bot.service dbrain-watchdog.service \
-    dbrain-process.timer dbrain-doctor.timer dbrain-weekly.timer
+    dbrain-process.timer dbrain-doctor.timer
 # restart (not just enable --now): on a re-run the units may have changed, and
 # enable --now won't re-apply a new unit to an already-running service.
 # KillMode=process means restarting the bot/watchdog does NOT kill the brain.
 systemctl --user restart dbrain-bot.service dbrain-watchdog.service
-systemctl --user start dbrain-process.timer dbrain-doctor.timer dbrain-weekly.timer
+systemctl --user start dbrain-process.timer dbrain-doctor.timer
 
 say "7/8 Guard: no claude -p in the hot path"
 bash "$PROJECT_DIR/scripts/check-no-claude-p.sh"

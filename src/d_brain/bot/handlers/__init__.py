@@ -9,7 +9,6 @@ from d_brain.bot.handlers import (
     process,
     text,
     voice,
-    weekly,
 )
 
 __all__ = [
@@ -21,5 +20,4 @@ __all__ = [
     "process",
     "text",
     "voice",
-    "weekly",
 ]

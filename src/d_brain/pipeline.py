@@ -1,12 +1,11 @@
-"""Headless pipeline entrypoint for the daily/weekly cron timers.
+"""Headless pipeline entrypoint for the daily cron timer.
 
-Replaces the old `claude --print -p` phases in process.sh: each command runs
+Replaces the old `claude --print -p` phases in process.sh: the command runs
 through the shared persistent interactive session (subscription billing). The
 surrounding shell shim still handles graph rebuild, memory decay, git and
 Telegram delivery.
 
     uv run python -m d_brain.pipeline daily   # prints the HTML report
-    uv run python -m d_brain.pipeline weekly
 
 Exit code 0 on success (report), 1 otherwise.
 """
@@ -22,8 +21,6 @@ def run(cmd: str, proc: Any) -> tuple[str, bool]:
     """Run a pipeline command against a processor. Returns (text, ok)."""
     if cmd == "daily":
         res = proc.process_daily()
-    elif cmd == "weekly":
-        res = proc.generate_weekly()
     else:
         return f"unknown command: {cmd}", False
     if res.get("report"):

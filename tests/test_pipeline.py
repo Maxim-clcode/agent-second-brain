@@ -1,18 +1,14 @@
-"""Tests for the daily/weekly pipeline entrypoint (no claude -p)."""
+"""Tests for the daily pipeline entrypoint (no claude -p)."""
 
 from d_brain.pipeline import run
 
 
 class FakeProc:
-    def __init__(self, daily=None, weekly=None):
+    def __init__(self, daily=None):
         self._daily = daily or {}
-        self._weekly = weekly or {}
 
     def process_daily(self):
         return self._daily
-
-    def generate_weekly(self):
-        return self._weekly
 
 
 def test_run_daily_returns_report_and_ok():
@@ -29,10 +25,11 @@ def test_run_daily_error_is_not_ok():
     assert "no daily file" in text
 
 
-def test_run_weekly():
-    proc = FakeProc(weekly={"report": "<b>weekly</b>", "processed_entries": 1})
-    text, ok = run("weekly", proc)
-    assert ok and text == "<b>weekly</b>"
+def test_run_weekly_is_unknown_command():
+    """v3.0: the weekly digest is removed; 'weekly' is no longer a command."""
+    text, ok = run("weekly", FakeProc())
+    assert not ok
+    assert "unknown" in text.lower()
 
 
 def test_run_unknown_command():

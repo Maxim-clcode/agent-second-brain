@@ -37,7 +37,6 @@ def create_dispatcher() -> Dispatcher:
         process,
         text,
         voice,
-        weekly,
     )
 
     # Use memory storage for FSM (required for /do command state)
@@ -46,7 +45,6 @@ def create_dispatcher() -> Dispatcher:
     # Register routers - ORDER MATTERS
     dp.include_router(commands.router)
     dp.include_router(process.router)
-    dp.include_router(weekly.router)
     dp.include_router(do.router)  # Before voice/text to catch FSM state
     dp.include_router(buttons.router)  # Reply keyboard buttons
     dp.include_router(voice.router)

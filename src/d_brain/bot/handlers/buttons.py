@@ -25,14 +25,6 @@ async def btn_process(message: Message) -> None:
     await cmd_process(message)
 
 
-@router.message(F.text == "📅 Неделя")
-async def btn_weekly(message: Message) -> None:
-    """Handle Weekly button."""
-    from d_brain.bot.handlers.weekly import cmd_weekly
-
-    await cmd_weekly(message)
-
-
 @router.message(F.text == "✨ Запрос")
 async def btn_do(message: Message, state: FSMContext) -> None:
     """Handle Do button - set state and wait for input."""

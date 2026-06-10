@@ -71,15 +71,6 @@ def test_process_daily_ok(tmp_path):
     assert sess.prompts
 
 
-def test_generate_weekly_ok(tmp_path):
-    (tmp_path / "summaries").mkdir()
-    sess = FakeSession(AskResult("ok", reply="<b>weekly</b>"))
-    p = ClaudeProcessor(tmp_path, session=sess)
-    r = p.generate_weekly()
-    assert r["report"] == "<b>weekly</b>"
-    assert sess.prompts
-
-
 def test_prompts_contain_no_todoist_references(tmp_path):
     """v3.0: Todoist is removed; no prompt may instruct the agent to use it."""
     (tmp_path / "daily").mkdir()
