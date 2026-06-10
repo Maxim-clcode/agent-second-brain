@@ -45,18 +45,6 @@ class Settings(BaseSettings):
     )
     tz: str = Field(default="UTC", description="Timezone for timers/reports")
 
-    # ── escape hatch (fallback provider routing) ─────────────────────
-    dbrain_mode: str = Field(
-        default="interactive",
-        description="interactive (subscription) | router (claude -p via base URL)",
-    )
-    anthropic_base_url: str = Field(
-        default="", description="Fallback provider base URL (router mode)"
-    )
-    anthropic_auth_token: str = Field(
-        default="", description="Fallback provider API key (router mode)"
-    )
-
     @property
     def admin_chat_id(self) -> int | None:
         """First allowed user — destination for health alerts / reports."""
