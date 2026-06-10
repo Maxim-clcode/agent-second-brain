@@ -8,6 +8,7 @@ ChatSessionManager for Claude to process and respond — no debounce buffer.
 import asyncio
 import html
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -34,7 +35,8 @@ MAX_RESPONSE_LENGTH = 4096
 # - control: client-side Claude Code commands — no model turn, fire-and-forget
 # - tui: interactive full-screen UIs — undrivable through a typed pane
 # - everything else (incl. /skill-name) is a normal model turn → marker path
-_CONTROL = {"/clear", "/compact", "/model"}
+# /compact is NOT here: commands.router (registered earlier) intercepts it.
+_CONTROL = {"/clear", "/model"}
 _TUI_ONLY = {"/agents", "/config", "/login"}
 
 _manager: ChatSessionManager | None = None
@@ -183,7 +185,10 @@ def extract_media(message: Any) -> tuple[str, str, str, str | None]:
         name = getattr(obj, "file_name", None)
         ext = default_ext or "bin"
         if name and "." in name:
-            ext = name.rsplit(".", 1)[-1].lower()
+            candidate = name.rsplit(".", 1)[-1].lower()
+            # file_name is sender-controlled — never let it shape the path
+            if re.fullmatch(r"[a-z0-9]{1,10}", candidate):
+                ext = candidate
         return (kind, obj.file_id, ext, name)
     raise ValueError("message carries no known media")
 
@@ -195,7 +200,8 @@ def forward_note(origin: Any) -> str:
     user = getattr(origin, "sender_user", None)
     if user is not None:
         return f"[переслано от: {user.full_name}]\n"
-    chat = getattr(origin, "chat", None)
+    # MessageOriginChannel carries .chat, MessageOriginChat carries .sender_chat
+    chat = getattr(origin, "chat", None) or getattr(origin, "sender_chat", None)
     if chat is not None:
         return f"[переслано из: {chat.title}]\n"
     name = getattr(origin, "sender_user_name", None)
@@ -217,6 +223,45 @@ def build_media_prompt(
         "видео/аудио опиши по подписи и контексту), сохрани суть в память "
         "по правилам vault и кратко ответь, что сохранил."
     )
+
+
+# Telegram albums arrive as N separate messages sharing media_group_id.
+# Buffer them briefly and hand the brain ONE prompt with all paths —
+# otherwise an album means N long brain turns over the same context.
+ALBUM_SETTLE = 1.5
+_album_buf: dict[str, list[dict[str, str]]] = {}
+_album_tasks: dict[str, asyncio.Task] = {}
+
+
+def build_album_prompt(items: list[dict[str, str]]) -> str:
+    fwd = next((i["fwd"] for i in items if i["fwd"]), "")
+    captions = [i["caption"] for i in items if i["caption"]]
+    files = "\n".join(f"- {i['rel_path']} ({i['kind']})" for i in items)
+    caption_part = f"\nПодпись: {' / '.join(captions)}" if captions else ""
+    return (
+        f"{fwd}Пользователь прислал альбом из {len(items)} файлов:\n"
+        f"{files}{caption_part}\n"
+        "Прочитай файлы (Read поддерживает изображения и PDF), сохрани суть "
+        "в память по правилам vault одной записью и кратко ответь."
+    )
+
+
+async def queue_album_item(
+    bot: Bot, *, chat_id: int, user_id: int, group_id: str, item: dict[str, str]
+) -> None:
+    _album_buf.setdefault(group_id, []).append(item)
+    if group_id not in _album_tasks:
+        _album_tasks[group_id] = asyncio.create_task(
+            _flush_album(bot, chat_id, user_id, group_id)
+        )
+
+
+async def _flush_album(bot: Bot, chat_id: int, user_id: int, group_id: str) -> None:
+    await asyncio.sleep(ALBUM_SETTLE)
+    items = _album_buf.pop(group_id, [])
+    _album_tasks.pop(group_id, None)
+    if items:
+        await _process_and_reply(bot, chat_id, user_id, build_album_prompt(items))
 
 
 # --- Handlers ---
@@ -268,7 +313,10 @@ async def handle_chat_voice(message: Message, bot: Bot) -> None:
 
     except Exception as e:
         logger.exception("Error processing voice in chat")
-        await message.answer(f"Error: {e}")
+        try:
+            await message.answer(f"Error: {html.escape(str(e)[:200])}")
+        except Exception:
+            logger.exception("Failed to send voice error message")
 
 
 @router.message(F.text)
@@ -315,9 +363,17 @@ async def handle_chat_media(message: Message, bot: Bot) -> None:
 
     settings = get_settings()
     storage = VaultStorage(settings.vault_path)
+    timestamp = datetime.fromtimestamp(message.date.timestamp())
+    caption = message.caption or ""
+    fwd = forward_note(getattr(message, "forward_origin", None))
 
     try:
         kind, file_id, ext, original_name = extract_media(message)
+    except ValueError:
+        await message.answer(UNSUPPORTED_REPLY)
+        return
+
+    try:
         file = await bot.get_file(file_id)
         if not file.file_path:
             await message.answer("Не удалось скачать файл.")
@@ -327,13 +383,9 @@ async def handle_chat_media(message: Message, bot: Bot) -> None:
             await message.answer("Не удалось скачать файл.")
             return
 
-        timestamp = datetime.fromtimestamp(message.date.timestamp())
         rel_path = storage.save_attachment(
             file_bytes.read(), timestamp.date(), timestamp, ext
         )
-
-        caption = message.caption or ""
-        fwd = forward_note(getattr(message, "forward_origin", None))
 
         # Safety net: save to daily with an Obsidian embed
         daily_entry = f"{fwd}![[{rel_path}]]"
@@ -349,6 +401,22 @@ async def handle_chat_media(message: Message, bot: Bot) -> None:
             msg_id=message.message_id,
         )
 
+        group_id = getattr(message, "media_group_id", None)
+        if group_id:
+            await queue_album_item(
+                bot,
+                chat_id=message.chat.id,
+                user_id=message.from_user.id,
+                group_id=str(group_id),
+                item={
+                    "kind": kind,
+                    "rel_path": rel_path,
+                    "caption": caption,
+                    "fwd": fwd,
+                },
+            )
+            return
+
         prompt = build_media_prompt(
             kind=kind,
             rel_path=rel_path,
@@ -360,7 +428,22 @@ async def handle_chat_media(message: Message, bot: Bot) -> None:
 
     except Exception as e:
         logger.exception("Error processing media in chat")
-        await message.answer(f"Error: {e}")
+        # Bot API can't hand us files >20MB — keep the librarian promise:
+        # the fact and the caption still land in daily.
+        if "too big" in str(e).lower():
+            note = f"{fwd}(файл >20MB — Telegram не отдаёт его ботам)"
+            if caption:
+                note += f"\n\n{caption}"
+            storage.append_to_daily(note, timestamp, f"[{kind}]")
+            await message.answer(
+                "Файл больше 20 МБ — Telegram не отдаёт такие ботам. "
+                "Подпись сохранил; перешли файл иначе (ссылкой/частями)."
+            )
+            return
+        try:
+            await message.answer(f"Error: {html.escape(str(e)[:200])}")
+        except Exception:
+            logger.exception("Failed to send media error message")
 
 
 @router.message()

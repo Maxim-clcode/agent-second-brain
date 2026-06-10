@@ -77,7 +77,13 @@ class VaultStorage:
         """
         dir_path = self.get_attachments_dir(day)
         time_str = timestamp.strftime("%H%M%S")
+        # Telegram albums arrive as N messages within the same second —
+        # uniquify so concurrent saves never overwrite each other.
         filename = f"img-{time_str}.{extension}"
+        counter = 1
+        while (dir_path / filename).exists():
+            filename = f"img-{time_str}-{counter}.{extension}"
+            counter += 1
         file_path = dir_path / filename
 
         file_path.write_bytes(data)

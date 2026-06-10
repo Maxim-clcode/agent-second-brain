@@ -244,3 +244,75 @@ def test_unsupported_content_reply_exists():
     from d_brain.bot.handlers.chat import UNSUPPORTED_REPLY
 
     assert "голос" in UNSUPPORTED_REPLY or "voice" in UNSUPPORTED_REPLY.lower()
+
+
+# ── blind-review fixes: collisions, albums, attribution, escaping ──────────
+
+
+def test_save_attachment_never_overwrites_same_second(tmp_path):
+    from datetime import date, datetime
+
+    from d_brain.services.storage import VaultStorage
+
+    s = VaultStorage(tmp_path)
+    ts = datetime(2026, 6, 10, 12, 0, 0)
+    p1 = s.save_attachment(b"one", date(2026, 6, 10), ts, "jpg")
+    p2 = s.save_attachment(b"two", date(2026, 6, 10), ts, "jpg")
+    assert p1 != p2
+    assert (tmp_path / "attachments/2026-06-10").glob("*")
+    assert (tmp_path / p1).read_bytes() == b"one"
+    assert (tmp_path / p2).read_bytes() == b"two"
+
+
+def test_forward_note_anonymous_group_admin():
+    from d_brain.bot.handlers.chat import forward_note
+
+    origin = _Stub(sender_user=None, chat=None, sender_chat=_Stub(title="Work Chat"),
+                   sender_user_name=None)
+    assert "Work Chat" in forward_note(origin)
+
+
+def test_extract_media_sanitizes_hostile_extension():
+    from d_brain.bot.handlers.chat import extract_media
+
+    doc = _Stub(file_id="d1", file_name="x.a/b")
+    msg = _Stub(photo=None, document=doc, video=None, audio=None,
+                animation=None, video_note=None)
+    _, _, ext, _ = extract_media(msg)
+    assert "/" not in ext and "\\" not in ext
+
+
+def test_compact_not_a_control_command():
+    """commands.router intercepts /compact earlier — keeping it in _CONTROL
+    is dead code that lies about behavior."""
+    from d_brain.bot.handlers.chat import classify_command
+
+    assert classify_command("/compact") == "turn"
+
+
+def test_album_items_flush_as_single_prompt(monkeypatch):
+    from d_brain.bot.handlers import chat
+
+    mgr = FakeManager(reply="ok")
+    monkeypatch.setattr(chat, "_get_manager", lambda: mgr)
+    monkeypatch.setattr(chat, "ALBUM_SETTLE", 0.01)
+    bot = FakeBot()
+
+    async def run():
+        await chat.queue_album_item(
+            bot, chat_id=10, user_id=1, group_id="g1",
+            item={"kind": "photo", "rel_path": "attachments/a.jpg",
+                  "caption": "подпись", "fwd": ""},
+        )
+        await chat.queue_album_item(
+            bot, chat_id=10, user_id=1, group_id="g1",
+            item={"kind": "photo", "rel_path": "attachments/b.jpg",
+                  "caption": "", "fwd": ""},
+        )
+        await asyncio.sleep(0.1)
+
+    asyncio.run(run())
+    assert len(mgr.sent) == 1
+    prompt = mgr.sent[0][1]
+    assert "attachments/a.jpg" in prompt and "attachments/b.jpg" in prompt
+    assert "подпись" in prompt
