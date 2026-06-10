@@ -43,7 +43,9 @@ def test_no_debounce_infrastructure_left():
     """The debounce buffer is fully removed."""
     from d_brain.bot.handlers import chat
 
-    for name in ("DEBOUNCE_SECONDS", "DebounceBuffer", "_add_to_buffer", "_debounce_flush", "_buffers"):
+    zombies = ("DEBOUNCE_SECONDS", "DebounceBuffer", "_add_to_buffer",
+               "_debounce_flush", "_buffers")
+    for name in zombies:
         assert not hasattr(chat, name), f"zombie debounce symbol: {name}"
 
 

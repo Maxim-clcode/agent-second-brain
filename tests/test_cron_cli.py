@@ -4,7 +4,7 @@ The CLI is what the brain calls via Bash, so its contract is the UX:
 human-readable output, exit 0 on success, exit 2 on bad input.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from d_brain.cron import main
 from d_brain.services.cron_store import CronStore
@@ -15,7 +15,7 @@ def _dir(tmp_path):
 
 
 def _future_iso():
-    return (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    return (datetime.now(UTC) + timedelta(hours=2)).isoformat()
 
 
 def test_add_every_writes_job_and_prints_id(tmp_path, capsys):
@@ -75,7 +75,7 @@ def test_add_oneshot_at_with_delete_after_run(tmp_path):
 
 
 def test_add_at_in_the_past_exits_2(tmp_path, capsys):
-    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
     rc = main(["add", "--dir", _dir(tmp_path), "--prompt", "x", "--at", past])
     assert rc == 2
     assert "past" in capsys.readouterr().err

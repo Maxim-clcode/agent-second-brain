@@ -1,7 +1,7 @@
 """Tests for the cron job store and schedule math (pure, no tmux)."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -14,7 +14,7 @@ from d_brain.services.cron_store import (
     parse_schedule,
 )
 
-NOW = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)  # 17:00 in Tashkent
+NOW = datetime(2026, 6, 10, 12, 0, tzinfo=UTC)  # 17:00 in Tashkent
 
 
 # ── parse_schedule ───────────────────────────────────────────────────
@@ -81,7 +81,7 @@ def test_next_run_cron_respects_tz():
 
 
 def test_next_run_cron_same_day_when_still_ahead():
-    early = datetime(2026, 6, 10, 2, 0, tzinfo=timezone.utc)  # 07:00 local
+    early = datetime(2026, 6, 10, 2, 0, tzinfo=UTC)  # 07:00 local
     s = Schedule(kind="cron", expr="0 9 * * *", tz="Asia/Tashkent")
     nxt = compute_next_run(s, now=early)
     assert nxt == datetime(2026, 6, 10, 9, 0, tzinfo=ZoneInfo("Asia/Tashkent"))

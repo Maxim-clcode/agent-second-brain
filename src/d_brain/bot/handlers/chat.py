@@ -80,7 +80,9 @@ async def _dispatch_text(bot: Bot, chat_id: int, user_id: int, text: str) -> Non
     kind = classify_command(text)
     if kind == "control":
         await _get_manager().send_control(text)
-        await bot.send_message(chat_id, f"⌨️ <code>{html.escape(text)}</code> отправлена в сессию.")
+        await bot.send_message(
+            chat_id, f"⌨️ <code>{html.escape(text)}</code> отправлена в сессию."
+        )
         return
     if kind == "tui":
         await bot.send_message(
@@ -113,7 +115,9 @@ async def _process_and_reply(bot: Bot, chat_id: int, user_id: int, prompt: str) 
         if response:
             await send_response(bot, chat_id, response)
         else:
-            logger.warning("Empty response from Claude for user %d, retrying...", user_id)
+            logger.warning(
+                "Empty response from Claude for user %d, retrying...", user_id
+            )
             # Retry once before giving up — don't reset session on first empty
             response = await manager.send_message(user_id, prompt)
             if response:

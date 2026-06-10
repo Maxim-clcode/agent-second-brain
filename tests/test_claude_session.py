@@ -329,7 +329,9 @@ class FakeTmuxText(FakeTmux):
 
 
 def test_ask_wrap_false_does_not_append_marker_instruction(tmp_path, clock):
-    fake = FakeTmuxText([READY, THINKING, "ответ\n" + READY, "ответ\n" + READY], exists=True)
+    fake = FakeTmuxText(
+        [READY, THINKING, "ответ\n" + READY, "ответ\n" + READY], exists=True
+    )
     (tmp_path / ".dbrain").mkdir()
     (tmp_path / ".dbrain" / "ready").touch()
     s = make_session(tmp_path, fake, clock)

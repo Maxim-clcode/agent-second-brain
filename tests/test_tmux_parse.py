@@ -332,7 +332,8 @@ def test_is_idle_false_when_footer_present_but_thinking():
     permissions, so it must never be treated as an idle signal by itself."""
     from d_brain.services.tmux_parse import is_idle
 
-    pane = "long transcript\n" + _WORKING + "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+    footer = "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+    pane = "long transcript\n" + _WORKING + footer
     assert not is_idle(pane)
 
 
