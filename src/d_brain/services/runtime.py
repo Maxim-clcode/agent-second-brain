@@ -11,7 +11,7 @@ import asyncio
 import uuid
 
 from d_brain.config import Settings
-from d_brain.services.claude_session import ClaudeSession, RouterSession
+from d_brain.services.claude_session import ClaudeSession
 from d_brain.services.processor import ClaudeProcessor
 
 _session: ClaudeSession | None = None
@@ -40,19 +40,10 @@ def _persisted_name(settings: Settings) -> str:
     return name
 
 
-def get_session(settings: Settings):
-    """Return the shared session: interactive ClaudeSession, or RouterSession
-    when the escape hatch (DBRAIN_MODE=router) is engaged."""
+def get_session(settings: Settings) -> ClaudeSession:
+    """Return the shared interactive ClaudeSession singleton."""
     global _session
     if _session is not None:
-        return _session
-    if settings.dbrain_mode == "router":
-        _session = RouterSession(
-            base_url=settings.anthropic_base_url,
-            auth_token=settings.anthropic_auth_token,
-            work_dir=settings.vault_path,
-            model=settings.claude_model or None,
-        )
         return _session
     project_root = settings.vault_path.parent
     mcp = project_root / "mcp-config.json"
