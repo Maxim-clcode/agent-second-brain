@@ -7,11 +7,10 @@ Voice-first personal assistant for capturing thoughts and managing tasks via Tel
 **Before doing anything else, read these files in order:**
 
 1. `vault/MEMORY.md` — curated long-term memory (preferences, decisions, context)
-2. `vault/.memory-config.json` — memory decay configuration
-3. `vault/daily/YYYY-MM-DD.md` — today's entries
-4. `vault/daily/YYYY-MM-DD.md` — yesterday's entries (for continuity)
-5. `vault/goals/3-weekly.md` — this week's ONE Big Thing
-6. `vault/.session/handoff.md` — previous session context (if exists)
+2. `vault/daily/YYYY-MM-DD.md` — today's entries
+3. `vault/daily/YYYY-MM-DD.md` — yesterday's entries (for continuity)
+4. `vault/goals/3-weekly.md` — this week's ONE Big Thing
+5. `vault/.session/handoff.md` — previous session context (if exists)
 
 **Don't ask permission, just do it.** This ensures context continuity across sessions.
 
@@ -115,16 +114,16 @@ Run daily processing via `/process` command or automatically at 21:00.
 
 ### 3-Phase Pipeline:
 1. **CAPTURE** — Read daily entries → classify → JSON
-2. **EXECUTE** — Create Todoist tasks, save thoughts, update CRM → JSON
+2. **EXECUTE** — Save thoughts, update CRM → JSON
 3. **REFLECT** — Generate HTML report, update MEMORY, record observations
 
 Each phase = fresh Claude context for better quality.
 
-## Card Template (agent-memory)
+## Card Template (autograph)
 
-**Skill:** `.claude/skills/agent-memory/SKILL.md`
+**Skill:** `.claude/skills/autograph/SKILL.md`
 
-All new vault cards follow the agent-memory template:
+All new vault cards follow the autograph template:
 
 ```yaml
 ---
@@ -149,39 +148,28 @@ tier: active
 - `tags` — REQUIRED. 2-5 tags, lowercase, hyphen-separated
 - `status` ≠ `tier`: status = business status, tier = memory (automatic)
 - One fact = one place (DRY). References via [[wikilinks]]
-- Decay engine: `uv run .claude/skills/agent-memory/scripts/memory-engine.py decay .`
+- Decay engine: `uv run .claude/skills/autograph/scripts/engine.py decay .`
 
 ## Skills & References
 
 | Skill | Purpose |
 |-------|---------|
 | `dbrain-processor` | Main daily processing (3-phase pipeline) |
-| `graph-builder` | Vault link analysis and building |
-| `vault-health` | Health scoring, MOC generation, link repair |
-| `agent-memory` | Card template, decay engine, tiered search |
-| `todoist-ai` | Todoist task management via MCP |
+| `autograph` | Typed vault engine: schema enforcement, graph health, decay, MOC, dedup |
 
 - **Processing:** `.claude/skills/dbrain-processor/SKILL.md`
-- **Graph Builder:** `.claude/skills/graph-builder/SKILL.md`
-- **Vault Health:** `.claude/skills/vault-health/SKILL.md`
-- **Agent Memory:** `.claude/skills/agent-memory/SKILL.md`
-- **Todoist:** `.claude/skills/todoist-ai/SKILL.md`
+- **Autograph:** `.claude/skills/autograph/SKILL.md`
 - **Rules:** `.claude/rules/` (daily, thoughts, goals, obsidian-markdown, weekly-reflection)
 - **Docs:** `.claude/docs/`
 
-## Graph Builder
+## Vault Graph (autograph)
 
 **Purpose:** Analysis and maintenance of vault link structure.
-
-**Architecture:**
-1. `scripts/analyze.py` — deterministic vault traversal
-2. `scripts/add_links.py` — batch link addition
-3. Agent — semantic links for orphan files
 
 **Usage:**
 ```bash
 # Analyze vault
-uv run vault/.claude/skills/graph-builder/scripts/analyze.py
+uv run vault/.claude/skills/autograph/scripts/graph.py health vault
 
 # Result
 vault/.graph/vault-graph.json  # JSON graph with stats
@@ -199,8 +187,6 @@ vault/.graph/report.md         # Human-readable report
 
 | Agent | Purpose |
 |-------|---------|
-| `weekly-digest` | Weekly review with goal progress |
-| `goal-aligner` | Check task-goal alignment |
 | `note-organizer` | Organize vault, fix links |
 | `inbox-processor` | GTD-style inbox processing |
 
@@ -226,9 +212,6 @@ Reports use Telegram HTML:
 | Command | Action |
 |---------|--------|
 | `/process` | Run daily processing |
-| `/do` | Execute arbitrary request |
-| `/weekly` | Generate weekly digest |
-| `/align` | Check goal alignment |
 | `/organize` | Organize vault |
 | `/graph` | Analyze vault links |
 

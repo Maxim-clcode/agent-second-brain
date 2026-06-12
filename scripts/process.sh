@@ -9,9 +9,13 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VAULT_DIR="$PROJECT_DIR/vault"
 ENV_FILE="$PROJECT_DIR/.env"
 
-# Load environment variables
+# Load environment variables (set -a survives quoted values and spaces,
+# unlike export $(... | xargs), which word-splits and strips quotes)
 if [ -f "$ENV_FILE" ]; then
-    export $(grep -v '^#' "$ENV_FILE" | xargs)
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set +a
 fi
 
 # Check token
@@ -25,7 +29,8 @@ export TZ="${TZ:-UTC}"
 
 # Date and chat_id
 TODAY=$(date +%Y-%m-%d)
-CHAT_ID="${ALLOWED_USER_IDS//[\[\]]/}"  # remove brackets from [123456]
+CHAT_ID="${ALLOWED_USER_IDS//[\[\] ]/}"  # strip brackets/spaces from [123, 456]
+CHAT_ID="${CHAT_ID%%,*}"  # first id only — the admin gets the report
 
 echo "=== d-brain processing for $TODAY ==="
 
@@ -47,7 +52,7 @@ if [ "$DAILY_SIZE" -lt 50 ]; then
 
     # Still rebuild graph and commit
     cd "$VAULT_DIR"
-    uv run .claude/skills/graph-builder/scripts/analyze.py || echo "Graph rebuild failed (non-critical)"
+    uv run .claude/skills/autograph/scripts/graph.py health . || echo "Graph rebuild failed (non-critical)"
     cd "$PROJECT_DIR"
 
     git add -A
@@ -75,105 +80,17 @@ fi
 echo "ORIENT: daily=$DAILY_SIZE bytes, handoff=OK, graph=OK"
 # ── END ORIENT PHASE ──
 
-# MCP timeout for stdio server (default 5 sec is too short)
-export MCP_TIMEOUT=30000
-export MAX_MCP_OUTPUT_TOKENS=50000
+# ── PROCESS via the persistent interactive session (NO claude -p) ──
+# The 3-phase claude -p pipeline is gone: after 2026-06-15 that bills against
+# the Agent SDK credit. We drive the long-lived interactive session instead,
+# which stays on the subscription. The Python entrypoint runs the daily
+# processing through the shared session and prints the HTML report.
+echo "=== Daily processing (interactive session) ==="
+REPORT=$(cd "$PROJECT_DIR" && uv run python -m d_brain.pipeline daily 2>&1) || true
 
-# ── 3-PHASE PIPELINE ──
-# Phase 1: CAPTURE (classify entries → JSON)
-# Phase 2: EXECUTE (create tasks, save thoughts → JSON)
-# Phase 3: REFLECT (generate HTML report, update MEMORY)
-# Each phase = fresh Claude context for better quality.
-
-SESSION_DIR="$VAULT_DIR/.session"
-mkdir -p "$SESSION_DIR"
-CAPTURE_FILE="$SESSION_DIR/capture.json"
-EXECUTE_FILE="$SESSION_DIR/execute.json"
-
-# Find yearly goals file (auto-detect year)
-YEARLY_GOALS=$(ls "$VAULT_DIR/goals/1-yearly-"*.md 2>/dev/null | tail -1)
-YEARLY_GOALS_NAME=$(basename "$YEARLY_GOALS" 2>/dev/null || echo "1-yearly.md")
-
-# MCP config (needed for Phase 2)
-MCP_PROMPT="CRITICAL: MCP loads in 10-30 seconds. You are NOT in subprocess.
-Algorithm: 1) Call. 2) Error? Wait 10 sec. 3) Call again. 4) Wait 20 sec. 5) Call — GUARANTEED to work.
-DO NOT say MCP unavailable. It is available. Just wait and call."
-
-cd "$VAULT_DIR"
-
-# ── Phase 1: CAPTURE ──
-echo "=== Phase 1: CAPTURE ==="
-CAPTURE=$(claude --print --dangerously-skip-permissions \
-    -p "Today is $TODAY. Read .claude/skills/dbrain-processor/phases/capture.md and execute Phase 1.
-Read daily/$TODAY.md, goals/3-weekly.md, goals/2-monthly.md, goals/$YEARLY_GOALS_NAME.
-Classify each entry. Return ONLY JSON." \
-    2>&1) || true
-
-# Extract JSON from output (Claude may add text around it)
-echo "$CAPTURE" | grep -o '{.*}' | python3 -c "
-import sys, json
-for line in sys.stdin:
-    try:
-        data = json.loads(line.strip())
-        json.dump(data, sys.stdout, ensure_ascii=False, indent=2)
-        sys.exit(0)
-    except: pass
-# Fallback: save raw output
-sys.stdout.write('{\"error\": \"failed to parse capture output\", \"raw\": \"see capture.log\"}')
-" > "$CAPTURE_FILE" 2>/dev/null || echo '{"error": "capture failed"}' > "$CAPTURE_FILE"
-
-echo "Capture saved: $(wc -c < "$CAPTURE_FILE") bytes"
-
-# Check if capture produced valid entries
-if grep -q '"error"' "$CAPTURE_FILE"; then
-    echo "WARN: Capture phase had issues, falling back to monolith mode"
-    # Fallback to monolith processing
-    REPORT=$(claude --print --dangerously-skip-permissions \
-        --mcp-config "$PROJECT_DIR/mcp-config.json" \
-        -p "Today is $TODAY. Execute daily processing according to dbrain-processor skill.
-$MCP_PROMPT" \
-        2>&1) || true
-else
-    # ── Phase 2: EXECUTE ──
-    echo "=== Phase 2: EXECUTE ==="
-    EXECUTE=$(claude --print --dangerously-skip-permissions \
-        --mcp-config "$PROJECT_DIR/mcp-config.json" \
-        -p "Today is $TODAY. Read .claude/skills/dbrain-processor/phases/execute.md and execute Phase 2.
-Read .session/capture.json for input data.
-Read business/_index.md and projects/_index.md for context.
-Create tasks in Todoist, save thoughts, update CRM. Return ONLY JSON.
-$MCP_PROMPT" \
-        2>&1) || true
-
-    echo "$EXECUTE" | grep -o '{.*}' | python3 -c "
-import sys, json
-for line in sys.stdin:
-    try:
-        data = json.loads(line.strip())
-        json.dump(data, sys.stdout, ensure_ascii=False, indent=2)
-        sys.exit(0)
-    except: pass
-sys.stdout.write('{\"error\": \"failed to parse execute output\"}')
-" > "$EXECUTE_FILE" 2>/dev/null || echo '{"error": "execute failed"}' > "$EXECUTE_FILE"
-
-    echo "Execute saved: $(wc -c < "$EXECUTE_FILE") bytes"
-
-    # ── Phase 3: REFLECT ──
-    echo "=== Phase 3: REFLECT ==="
-    REPORT=$(claude --print --dangerously-skip-permissions \
-        -p "Today is $TODAY. Read .claude/skills/dbrain-processor/phases/reflect.md and execute Phase 3.
-Read .session/capture.json and .session/execute.json for input data.
-Read MEMORY.md, .session/handoff.md, .graph/health-history.json.
-Generate HTML report, update MEMORY, record observations.
-Return ONLY RAW HTML (for Telegram)." \
-        2>&1) || true
-fi
-
-cd "$PROJECT_DIR"
-
-echo "=== Claude output ==="
+echo "=== pipeline output ==="
 echo "$REPORT"
-echo "===================="
+echo "======================="
 
 # Remove HTML comments (break Telegram HTML parser)
 REPORT_CLEAN=$(echo "$REPORT" | sed '/<!--/,/-->/d')
@@ -181,11 +98,11 @@ REPORT_CLEAN=$(echo "$REPORT" | sed '/<!--/,/-->/d')
 # Rebuild vault graph (keeps structure up to date)
 echo "=== Rebuilding vault graph ==="
 cd "$VAULT_DIR"
-uv run .claude/skills/graph-builder/scripts/analyze.py || echo "Graph rebuild failed (non-critical)"
+uv run .claude/skills/autograph/scripts/graph.py health . || echo "Graph rebuild failed (non-critical)"
 
 # Memory decay (update relevance scores and tiers)
 echo "=== Memory decay ==="
-uv run .claude/skills/agent-memory/scripts/memory-engine.py decay . || echo "Memory decay failed (non-critical)"
+uv run .claude/skills/autograph/scripts/engine.py decay . || echo "Memory decay failed (non-critical)"
 cd "$PROJECT_DIR"
 
 # Git commit

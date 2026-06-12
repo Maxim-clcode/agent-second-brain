@@ -1,5 +1,6 @@
 """Telegram bot initialization and polling."""
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -11,6 +12,9 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Update
 
 from d_brain.config import Settings
+from d_brain.services.cron_runner import run_cron
+from d_brain.services.runtime import get_session
+from d_brain.services.systemd_notify import notify, watchdog_interval
 
 logger = logging.getLogger(__name__)
 
@@ -25,21 +29,20 @@ def create_bot(settings: Settings) -> Bot:
 
 def create_dispatcher() -> Dispatcher:
     """Create and configure the dispatcher with routers."""
-    from d_brain.bot.handlers import buttons, commands, do, forward, photo, process, text, voice, weekly
+    from d_brain.bot.handlers import (
+        buttons,
+        chat,
+        commands,
+        process,
+    )
 
-    # Use memory storage for FSM (required for /do command state)
     dp = Dispatcher(storage=MemoryStorage())
 
     # Register routers - ORDER MATTERS
     dp.include_router(commands.router)
     dp.include_router(process.router)
-    dp.include_router(weekly.router)
-    dp.include_router(do.router)  # Before voice/text to catch FSM state
     dp.include_router(buttons.router)  # Reply keyboard buttons
-    dp.include_router(voice.router)
-    dp.include_router(photo.router)
-    dp.include_router(forward.router)
-    dp.include_router(text.router)  # Must be last (catch-all for text)
+    dp.include_router(chat.router)  # Catch-all for private chat (LAST)
     return dp
 
 
@@ -67,7 +70,10 @@ def create_auth_middleware(settings: Settings) -> MiddlewareType:
 
         # If no users allowed and not allow_all_users -> deny everyone
         if not settings.allowed_user_ids:
-            logger.warning("Access denied: no allowed_user_ids configured and allow_all_users is False")
+            logger.warning(
+                "Access denied: no allowed_user_ids configured and "
+                "allow_all_users is False"
+            )
             return None
 
         # Check if user is in allowed list
@@ -80,6 +86,14 @@ def create_auth_middleware(settings: Settings) -> MiddlewareType:
     return auth_middleware
 
 
+async def _watchdog_pinger() -> None:
+    """Ping systemd's watchdog while the event loop is healthy."""
+    interval = watchdog_interval()
+    while True:
+        await asyncio.sleep(interval)
+        notify("WATCHDOG=1")
+
+
 async def run_bot(settings: Settings) -> None:
     """Run the bot with polling."""
     bot = create_bot(settings)
@@ -88,8 +102,24 @@ async def run_bot(settings: Settings) -> None:
     # Always add auth middleware for security (it handles allow_all_users internally)
     dp.update.middleware(create_auth_middleware(settings))
 
+    # Bring the persistent Claude session up before serving requests; failure
+    # here is non-fatal (ask() will retry ensure on demand).
+    try:
+        await asyncio.to_thread(get_session(settings).ensure_session)
+    except Exception:
+        logger.exception("Claude session failed to start at boot; retrying on demand")
+
+    notify("READY=1")
+    pinger = asyncio.create_task(_watchdog_pinger())
+    cron_task = (
+        asyncio.create_task(run_cron(settings, bot)) if settings.cron_enabled else None
+    )
+
     logger.info("Starting bot polling...")
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        pinger.cancel()
+        if cron_task is not None:
+            cron_task.cancel()
         await bot.session.close()

@@ -35,3 +35,9 @@ vault/.graph/
 vault/business/
 vault/projects/
 vault/thoughts/
+
+# Local agent-skill installs (npx/pnpm skills add) — dev tooling, not the
+# product. Anchored to the repo root: vault/.claude/ IS the product.
+/.agents/
+/.claude/
+/skills-lock.json

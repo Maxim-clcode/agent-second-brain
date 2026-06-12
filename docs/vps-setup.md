@@ -110,7 +110,7 @@ uv --version
 
 ## Step 7: Install Node.js
 
-Required for MCP servers (Todoist integration):
+Required for Claude Code:
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
@@ -194,14 +194,6 @@ uv run python -c "import aiogram; print('aiogram OK')"
 3. Settings → API Keys
 4. Create key and copy
 
-### Todoist API Token (optional)
-
-1. Go to https://todoist.com/
-2. Settings → Integrations → Developer
-3. Copy API token
-
----
-
 ## Step 12: Configure Environment
 
 ```bash
@@ -213,7 +205,6 @@ Paste (replace with your values):
 ```bash
 TELEGRAM_BOT_TOKEN=7123456789:AAHdN8J2K4m5N6o7P8q9R0s1T2u3V4w5X6y
 DEEPGRAM_API_KEY=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0
-TODOIST_API_KEY=
 VAULT_PATH=./vault
 ALLOWED_USER_IDS=[123456789]
 ```
@@ -273,118 +264,31 @@ Stop with `Ctrl+C`.
 
 ---
 
-## Step 16: Setup Autostart (systemd)
+## Step 16: Install Services (one command)
 
-### Bot Service
-
-```bash
-sudo nano /etc/systemd/system/d-brain-bot.service
-```
-
-Paste (replace `myuser`):
-
-```ini
-[Unit]
-Description=d-brain Telegram Bot
-After=network.target
-
-[Service]
-Type=simple
-User=myuser
-WorkingDirectory=/home/myuser/projects/agent-second-brain
-ExecStart=/home/myuser/.local/bin/uv run python -m d_brain
-Restart=always
-RestartSec=10
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
+All services — the bot, the persistent brain session, the watchdog, the
+daily processing timer and the health-check timer — are installed by one
+idempotent script:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl start d-brain-bot
-sudo systemctl enable d-brain-bot
+cd ~/projects/agent-second-brain
+bash upgrade.sh
+```
 
-# Check status
-sudo systemctl status d-brain-bot
+It installs tmux, syncs Python dependencies, installs the `dbrain` CLI,
+sets up `dbrain-*` systemd **--user** units (no root services), enables
+linger so everything survives reboots, and runs a first health check.
+
+Check:
+
+```bash
+dbrain status
+systemctl --user is-active dbrain-bot dbrain-watchdog dbrain-process.timer dbrain-doctor.timer
 ```
 
 ---
 
-## Step 17: Daily Processing Timer (optional)
-
-Automatically process entries at 21:00 daily.
-
-### Edit process script
-
-```bash
-nano ~/projects/agent-second-brain/scripts/process.sh
-```
-
-Update paths at the top:
-```bash
-export HOME="/home/myuser"
-PROJECT_DIR="/home/myuser/projects/agent-second-brain"
-```
-
-Make executable:
-```bash
-chmod +x ~/projects/agent-second-brain/scripts/process.sh
-```
-
-### Create timer
-
-```bash
-sudo nano /etc/systemd/system/d-brain-process.timer
-```
-
-```ini
-[Unit]
-Description=Run d-brain processing daily at 21:00
-
-[Timer]
-OnCalendar=*-*-* 21:00:00
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-### Create service
-
-```bash
-sudo nano /etc/systemd/system/d-brain-process.service
-```
-
-```ini
-[Unit]
-Description=d-brain Daily Processing
-
-[Service]
-Type=oneshot
-User=myuser
-WorkingDirectory=/home/myuser/projects/agent-second-brain
-ExecStart=/home/myuser/projects/agent-second-brain/scripts/process.sh
-Environment=PYTHONUNBUFFERED=1
-```
-
-### Enable
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable d-brain-process.timer
-sudo systemctl start d-brain-process.timer
-
-# Check timer
-sudo systemctl list-timers | grep d-brain
-```
-
----
-
-## Step 18: Git Configuration
+## Step 17: Git Configuration
 
 ```bash
 cd ~/projects/agent-second-brain
@@ -417,25 +321,25 @@ If prompted for password, use Personal Access Token:
 
 ```bash
 # Bot status
-sudo systemctl status d-brain-bot
+dbrain status
 
-# Restart bot
-sudo systemctl restart d-brain-bot
+# Restart bot (the brain session survives — KillMode=process)
+systemctl --user restart dbrain-bot
 
 # Stop bot
-sudo systemctl stop d-brain-bot
+systemctl --user stop dbrain-bot
 
 # Real-time logs
-sudo journalctl -u d-brain-bot -f
+journalctl --user -u dbrain-bot -f
 
 # Last 100 log lines
-sudo journalctl -u d-brain-bot -n 100
+journalctl --user -u dbrain-bot -n 100
 
-# All d-brain services
-sudo systemctl status 'd-brain-*'
+# All dbrain services
+systemctl --user status 'dbrain-*'
 
 # List timers
-sudo systemctl list-timers
+systemctl --user list-timers
 
 # Manual processing
 cd ~/projects/agent-second-brain
@@ -443,9 +347,7 @@ cd ~/projects/agent-second-brain
 
 # Update code
 cd ~/projects/agent-second-brain
-git pull
-uv sync
-sudo systemctl restart d-brain-bot
+bash upgrade.sh
 ```
 
 ---
@@ -455,17 +357,17 @@ sudo systemctl restart d-brain-bot
 ### Bot doesn't respond
 
 ```bash
-sudo systemctl status d-brain-bot
-sudo journalctl -u d-brain-bot -n 100
+dbrain status
+journalctl --user -u dbrain-bot -n 100
 cat ~/projects/agent-second-brain/.env | grep TELEGRAM_BOT_TOKEN
-sudo systemctl restart d-brain-bot
+systemctl --user restart dbrain-bot
 ```
 
 ### Voice not transcribing
 
 ```bash
 cat ~/projects/agent-second-brain/.env | grep DEEPGRAM
-sudo journalctl -u d-brain-bot | grep -i error
+journalctl --user -u dbrain-bot | grep -i error
 ```
 
 ### Processing errors
@@ -474,13 +376,6 @@ sudo journalctl -u d-brain-bot | grep -i error
 claude --version
 claude auth status
 claude auth login  # if needed
-```
-
-### Todoist not working
-
-```bash
-cat ~/projects/agent-second-brain/.env | grep TODOIST
-mcp-cli call todoist find-tasks-by-date '{"startDate": "today"}'
 ```
 
 ### Permission errors
