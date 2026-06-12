@@ -34,6 +34,9 @@ module-name = "d_brain"
 [tool.ruff]
 line-length = 88
 target-version = "py312"
+# vault/ is the agent's workspace — skills there keep their own style;
+# the bot's lint gate covers src/ and tests/ only.
+extend-exclude = ["vault"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
