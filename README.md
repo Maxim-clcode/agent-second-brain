@@ -47,18 +47,17 @@ The fix isn't another app. It's removing the organizing step entirely: **you tal
 ## What talking to it looks like
 
 ```
-You   (voice, 40s, while walking): «Созвон с Алишером — они согласны на пилот,
-      но просят сдвинуть старт на июль. Надо обновить КП и напомнить мне
-      в пятницу отправить договор.»
+You   (voice, 40s, while walking): "Call with Alisher — they're in for the
+      pilot, but want to push the start to July. I need to update the
+      proposal, and remind me Friday to send the contract."
 
-Bot:  💾 Сохранил: CRM-карточка Алишера обновлена (пилот, старт июль),
-      связал с [[proekt-pilot]]. Напоминание поставлено: пятница 10:00 —
-      отправить договор.
+Bot:  💾 Saved: Alisher's CRM card updated (pilot, July start), linked
+      to [[pilot-project]]. Reminder set: Friday 10:00 — send the contract.
 
       — Friday, 10:00 —
 
-Bot:  🔔 Напоминание: отправить договор Алишеру. Контекст: пилот, старт июль,
-      КП обновлено во вторник.
+Bot:  🔔 Reminder: send Alisher the contract. Context: pilot, July start,
+      proposal updated on Tuesday.
 ```
 
 ```
