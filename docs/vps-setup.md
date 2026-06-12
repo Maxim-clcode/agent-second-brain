@@ -288,7 +288,7 @@ systemctl --user is-active dbrain-bot dbrain-watchdog dbrain-process.timer dbrai
 
 ---
 
-## Step 18: Git Configuration
+## Step 17: Git Configuration
 
 ```bash
 cd ~/projects/agent-second-brain

@@ -199,13 +199,14 @@ vault/
 
 ## Skills
 
-The agent has three built-in skills:
+The agent has four built-in skills:
 
 | Skill | What it does |
 |-------|-------------|
 | **dbrain-processor** | Classifies entries, saves notes |
 | **autograph** | Typed vault engine: Ebbinghaus decay, graph health, MOCs, schema-as-code, dedup |
 | **cron** | The agent manages its own schedule: reminders, intervals, cron expressions - from plain language |
+| **migrate-doctor** | Diagnoses and repairs broken upgrades from older versions |
 
 Want just the memory engine? See [autograph](https://github.com/smixs/autograph) - works standalone on any Obsidian vault, no dependencies.
 
