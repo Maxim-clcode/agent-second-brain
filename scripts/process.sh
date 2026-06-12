@@ -9,9 +9,13 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VAULT_DIR="$PROJECT_DIR/vault"
 ENV_FILE="$PROJECT_DIR/.env"
 
-# Load environment variables
+# Load environment variables (set -a survives quoted values and spaces,
+# unlike export $(... | xargs), which word-splits and strips quotes)
 if [ -f "$ENV_FILE" ]; then
-    export $(grep -v '^#' "$ENV_FILE" | xargs)
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set +a
 fi
 
 # Check token

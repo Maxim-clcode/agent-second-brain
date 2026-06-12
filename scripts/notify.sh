@@ -6,7 +6,12 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$PROJECT_DIR/.env"
-[ -f "$ENV_FILE" ] && export $(grep -v '^#' "$ENV_FILE" | xargs) || true
+if [ -f "$ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set +a
+fi
 
 MSG="${1:-d-brain alert}"
 CHAT_ID="${ALLOWED_USER_IDS//[\[\]]/}"
