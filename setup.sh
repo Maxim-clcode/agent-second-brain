@@ -299,8 +299,10 @@ configure_git_remote() {
 
     echo ""
     echo "Create a Personal Access Token on GitHub:"
-    echo "  1. Go to: github.com > Settings > Developer settings > Personal access tokens > Tokens (classic)"
-    echo "  2. Generate new token with 'repo' scope"
+    echo "  1. Go to: github.com > Settings > Developer settings > Personal access tokens > Fine-grained tokens"
+    echo "  2. Generate a token scoped to ONLY your agent-second-brain repo"
+    echo "     with Contents: Read and write (don't grant anything wider —"
+    echo "     the token is stored in .git/config on this server)"
     echo "  3. Copy the token"
     echo ""
 
@@ -319,6 +321,8 @@ configure_git_remote() {
     fi
 
     git remote set-url origin "https://$GITHUB_TOKEN@github.com/$GITHUB_USER/agent-second-brain.git"
+    # The token lives in .git/config — keep that file owner-only.
+    chmod 600 .git/config
     success "Git remote configured for push"
 }
 
