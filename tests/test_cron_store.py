@@ -168,3 +168,11 @@ def test_unknown_fields_in_file_are_ignored(tmp_path):
     (cron_dir / "jobs.json").write_text(json.dumps(payload))
     jobs = CronStore(cron_dir).load()
     assert jobs[0].id == "x"
+
+
+def test_jobs_file_is_owner_only(tmp_path):
+    # Prompts and chat ids are private — never world-readable.
+    store = CronStore(tmp_path / "cron")
+    store.save([_job()])
+    mode = store.jobs_file.stat().st_mode & 0o777
+    assert mode == 0o600
