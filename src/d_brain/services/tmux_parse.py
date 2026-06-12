@@ -163,6 +163,19 @@ def is_working(text: str) -> bool:
     return bool(_WORKING_RE.search(_chrome(text)))
 
 
+_SURVEY_RE = re.compile(r"How is Claude doing this session\?")
+
+
+def has_survey_prompt(text: str) -> bool:
+    """True iff the periodic feedback survey is on screen.
+
+    Claude Code occasionally shows "How is Claude doing this session?
+    1: Bad 2: Fine 3: Good 0: Dismiss" — it pollutes the chrome and must be
+    dismissed (key 0), never treated as a stalled turn.
+    """
+    return bool(_SURVEY_RE.search(text))
+
+
 def is_idle(text: str) -> bool:
     """True iff the session sits at an idle input prompt (no active turn).
 

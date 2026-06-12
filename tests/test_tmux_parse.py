@@ -378,3 +378,16 @@ def test_classify_onboarding_theme_as_logged_out():
         "  Syntax theme: ansi (ctrl+t to disable)\n"
     )
     assert classify_state(theme) == PaneState.LOGGED_OUT
+
+
+def test_survey_prompt_detected():
+    from d_brain.services.tmux_parse import has_survey_prompt
+
+    pane = (
+        "● How is Claude doing this session? (optional)\n"
+        "  1: Bad    2: Fine   3: Good   0: Dismiss\n"
+        "❯\n"
+        "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+    )
+    assert has_survey_prompt(pane)
+    assert not has_survey_prompt("❯\n  ⏵⏵ bypass permissions on\n")
