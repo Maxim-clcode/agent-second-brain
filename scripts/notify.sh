@@ -19,7 +19,7 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 MSG="${1:-d-brain alert}"
-CHAT_ID="${ALLOWED_USER_IDS//[\[\]]/}"
+CHAT_ID="${ALLOWED_USER_IDS//[\[\] ]/}"  # strip brackets/spaces
 CHAT_ID="${CHAT_ID%%,*}"  # first id only
 
 if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "$CHAT_ID" ]; then

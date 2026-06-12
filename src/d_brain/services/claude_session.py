@@ -104,7 +104,14 @@ class ClaudeSession:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         # The dir holds the full pane transcript and turn state — owner-only,
         # enforced on every start so pre-existing installs get repaired too.
-        os.chmod(self.runtime_dir, 0o700)
+        # A foreign-owned dir (e.g. once created via sudo) must degrade to a
+        # loud warning, not a constructor crash-loop across all services.
+        try:
+            os.chmod(self.runtime_dir, 0o700)
+        except OSError as exc:
+            logger.warning(
+                "could not restrict %s to owner-only: %s", self.runtime_dir, exc
+            )
         self.mcp_config = Path(mcp_config) if mcp_config else None
         self.system_prompt_file = (
             Path(system_prompt_file) if system_prompt_file else None
@@ -400,19 +407,25 @@ class ClaudeSession:
         with self._locked() as got:
             if not got:  # only happens with non-blocking; blocking=True here
                 return AskResult("error", detail="could not acquire pane lock")
+            # Claim the turn IMMEDIATELY: a stale inflight from a timed-out
+            # earlier turn must not misrepresent this holder to the steering
+            # gate while _ensure_locked() spends up to startup_timeout.
+            self._inflight.write_text(f"{log_id}\n{self._clock()}\n")
             try:
                 self._ensure_locked()
             except Exception as exc:  # noqa: BLE001 — must never escape ask()
                 logger.error("ensure_session failed for %s: %s", log_id, exc)
+                self._inflight.unlink(missing_ok=True)
                 return AskResult("error", detail=f"session start failed: {exc}")
 
             pre = classify_state(self._capture())
             if pre == PaneState.RATE_LIMITED:
+                self._inflight.unlink(missing_ok=True)
                 return AskResult("rate_limited")
             if pre == PaneState.LOGGED_OUT:
+                self._inflight.unlink(missing_ok=True)
                 return AskResult("logged_out")
 
-            self._inflight.write_text(f"{log_id}\n{self._clock()}\n")
             self._send_prompt(prompt, rid, wrap=wrap)
 
             last_active = self._clock()

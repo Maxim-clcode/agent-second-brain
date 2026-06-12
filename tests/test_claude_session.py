@@ -427,12 +427,22 @@ def test_runtime_dir_is_owner_only(tmp_path, clock):
 
 def test_pane_log_precreated_owner_only_before_pipe(tmp_path, clock):
     # pipe-pane appends the FULL Claude transcript via `cat >>` under the
-    # tmux server's umask — the file must already exist as 0600.
-    fake = FakeTmux([READY], exists=False)
-    s = make_session(tmp_path, fake, clock)
-    s.ensure_session()
+    # tmux server's umask — the file must ALREADY be 0600 when pipe-pane
+    # starts, not fixed up afterwards.
     log = tmp_path / ".dbrain" / "pane.log"
-    assert log.exists()
+    seen = {}
+
+    class Spy(FakeTmux):
+        def __call__(self, args, **kwargs):  # noqa: ANN001
+            if len(args) > 1 and args[1] == "pipe-pane":
+                seen["mode_at_pipe"] = (
+                    log.stat().st_mode & 0o777 if log.exists() else None
+                )
+            return super().__call__(args, **kwargs)
+
+    s = make_session(tmp_path, Spy([READY], exists=False), clock)
+    s.ensure_session()
+    assert seen["mode_at_pipe"] == 0o600
     assert (log.stat().st_mode & 0o777) == 0o600
 
 
@@ -463,3 +473,28 @@ def test_is_steerable_turn_distinguishes_chat_from_maintenance(tmp_path, clock):
         assert s.is_steerable_turn() is False  # the nightly pipeline
     finally:
         fh.close()
+
+
+def test_inflight_claimed_before_session_startup(tmp_path, clock):
+    # A stale inflight left by a timed-out chat turn must not misrepresent
+    # the new holder to the steering gate while session startup (up to
+    # startup_timeout) is still running.
+    inflight = tmp_path / ".dbrain" / "inflight"
+    seen = {}
+
+    class Spy(FakeTmux):
+        def __call__(self, args, **kwargs):  # noqa: ANN001
+            if len(args) > 1 and args[1] == "new-session":
+                seen["at_startup"] = (
+                    inflight.read_text() if inflight.exists() else None
+                )
+            return super().__call__(args, **kwargs)
+
+    fake = Spy([READY, READY, _complete("rid00001")], exists=False)
+    s = make_session(tmp_path, fake, clock)
+    inflight.write_text("stale-chat-rid\n0.0\n")  # leftover from a timeout
+
+    s.ask("nightly run", request_id="maint-process")
+
+    assert seen["at_startup"] is not None
+    assert seen["at_startup"].startswith("maint-process")
