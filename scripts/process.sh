@@ -29,7 +29,8 @@ export TZ="${TZ:-UTC}"
 
 # Date and chat_id
 TODAY=$(date +%Y-%m-%d)
-CHAT_ID="${ALLOWED_USER_IDS//[\[\]]/}"  # remove brackets from [123456]
+CHAT_ID="${ALLOWED_USER_IDS//[\[\] ]/}"  # strip brackets/spaces from [123, 456]
+CHAT_ID="${CHAT_ID%%,*}"  # first id only — the admin gets the report
 
 echo "=== d-brain processing for $TODAY ==="
 
