@@ -36,6 +36,7 @@ from d_brain.services.tmux_parse import (
     PaneState,
     classify_state,
     extract_reply,
+    has_survey_prompt,
     is_complete,
     is_idle,
     is_working,
@@ -451,6 +452,15 @@ class ClaudeSession:
                         return AskResult("ok", reply=strip_chrome(cap))
                 else:
                     idle_streak = 0
+
+                # The periodic "How is Claude doing?" survey pollutes the
+                # chrome and once made the stall detector interrupt a live
+                # turn. Dismiss it (0) and never count it as a stall.
+                if has_survey_prompt(cap):
+                    self._tmux("send-keys", "-t", self._target, "0")
+                    last_active = self._clock()
+                    self._sleep(self._poll_interval)
+                    continue
 
                 # Stall model: silence is NOT a hang signal — a quiet task
                 # still shows the working spinner. Stuck == no visible turn

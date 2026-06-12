@@ -498,3 +498,23 @@ def test_inflight_claimed_before_session_startup(tmp_path, clock):
 
     assert seen["at_startup"] is not None
     assert seen["at_startup"].startswith("maint-process")
+
+
+def test_ask_dismisses_feedback_survey_instead_of_stalling(tmp_path, clock):
+    # Claude Code periodically shows "How is Claude doing this session?" —
+    # it polluted the chrome, the stall detector fired Escape and the user
+    # got a session error. The session must press 0 (Dismiss) and carry on.
+    survey = (
+        "● How is Claude doing this session? (optional)\n"
+        "  1: Bad    2: Fine   3: Good   0: Dismiss\n" + READY
+    )
+    fake = FakeTmux(
+        [READY, survey, THINKING, _complete("rid00001")], exists=True
+    )
+    s = make_session(tmp_path, fake, clock)
+    res = s.ask("привет")
+    assert res.status == "ok"
+    pressed = [c for c in fake.sent_keys() if c[-1] == "0"]
+    assert pressed, "survey was not dismissed with 0"
+    escapes = [c for c in fake.sent_keys() if c[-1] == "Escape"]
+    assert not escapes, "stall interrupt fired instead of dismissing survey"
