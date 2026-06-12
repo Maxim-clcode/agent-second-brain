@@ -35,3 +35,8 @@ vault/.graph/
 vault/business/
 vault/projects/
 vault/thoughts/
+
+# Local agent-skill installs (npx/pnpm skills add) — dev tooling, not the product
+.agents/
+.claude/
+skills-lock.json
