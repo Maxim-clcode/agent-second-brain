@@ -48,6 +48,9 @@ Runner = Callable[..., subprocess.CompletedProcess]
 
 DEFAULT_TIMEOUT = 1200  # 20 min, matches the old subprocess pipeline
 DEFAULT_STALL_TIMEOUT = 180  # no new pane bytes for this long ⇒ wedged
+# request_id prefix that marks a turn as maintenance (pipeline, doctor,
+# /process) — such turns are never steering targets for chat input.
+MAINT_PREFIX = "maint-"
 _PANE_WIDTH = "200"
 # Height 50 (not taller): the TUI draws its footer (idle ❯ / bypass line)
 # just below content, so on a tall pane the footer lands mid-screen with a
@@ -307,6 +310,23 @@ class ClaudeSession:
         """True iff a turn is in flight (the pane lock is held)."""
         with self._locked(blocking=False) as got:
             return not got
+
+    def is_steerable_turn(self) -> bool:
+        """True iff the in-flight turn may receive steering input.
+
+        Maintenance turns (nightly pipeline, doctor canary, /process) tag
+        themselves with a ``maint-`` request_id — user text steered into
+        them would contaminate the background prompt and never get its own
+        answer. A held lock WITHOUT an inflight record is startup/recovery/
+        control — also not steerable.
+        """
+        if not self.is_turn_active():
+            return False
+        try:
+            first = self._inflight.read_text().splitlines()[0]
+        except (FileNotFoundError, IndexError):
+            return False
+        return not first.startswith(MAINT_PREFIX)
 
     def send_control(self, text: str) -> None:
         """Type a client-side Claude Code command verbatim, fire-and-forget.

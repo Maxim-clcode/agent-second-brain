@@ -68,3 +68,20 @@ def test_run_cli_exit_codes_follow_report():
     bad_sess = FakeSession(AskResult("logged_out"))
     assert run_cli(bad_sess, checks=[], alert=sent.append) == 1
     assert len(sent) == 2  # the telegram report goes out either way
+
+
+def test_canary_is_tagged_as_maintenance():
+    # Chat steering keys off the maint- prefix in the inflight id — the
+    # canary must never look like a steerable user turn.
+    class RecordingSession(FakeSession):
+        def __init__(self, result):
+            super().__init__(result)
+            self.request_ids = []
+
+        def ask(self, prompt, *, timeout=120, request_id=None):
+            self.request_ids.append(request_id)
+            return self.result
+
+    sess = RecordingSession(AskResult("ok", reply="DBRAIN_OK"))
+    Doctor(sess, checks=[]).run()
+    assert sess.request_ids and sess.request_ids[0].startswith("maint-")

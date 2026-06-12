@@ -52,8 +52,13 @@ class ClaudeProcessor:
     def _ask(self, prompt: str, *, wrap: bool = True) -> dict[str, Any]:
         if self.session is None:
             return {"error": "session not configured", "processed_entries": 0}
+        # maint- tag: chat steering must never inject user text into a
+        # pipeline turn (see ClaudeSession.is_steerable_turn).
         return self._to_report(
-            self.session.ask(prompt, timeout=DEFAULT_TIMEOUT, wrap=wrap)
+            self.session.ask(
+                prompt, timeout=DEFAULT_TIMEOUT, wrap=wrap,
+                request_id="maint-process",
+            )
         )
 
     # ── content helpers (unchanged) ──────────────────────────────────

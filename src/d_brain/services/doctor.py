@@ -59,6 +59,7 @@ class Doctor:
         res = self.session.ask(
             f"Reply with exactly {self._canary_token} and nothing else.",
             timeout=CANARY_TIMEOUT,
+            request_id="maint-doctor",
         )
         if res.status == "logged_out":
             return CheckResult("canary", False, "Claude разлогинился — нужен вход")

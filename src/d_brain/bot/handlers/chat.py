@@ -102,6 +102,15 @@ async def _dispatch_text(bot: Bot, chat_id: int, user_id: int, text: str) -> Non
         await bot.send_message(chat_id, "⏹ Останавливаю текущий ответ.")
         return
     if mode == "steer":
+        if not manager.is_steerable_turn():
+            # Maintenance turn (nightly pipeline / doctor / startup) holds
+            # the session — injecting user text would contaminate it.
+            await bot.send_message(
+                chat_id,
+                "🔧 Идёт фоновое обслуживание — повтори сообщение через "
+                "пару минут, отвечу как освобожусь.",
+            )
+            return
         await manager.steer(text)
         await bot.send_message(chat_id, "↪️ Передал в текущую задачу.")
         return

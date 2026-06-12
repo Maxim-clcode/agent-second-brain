@@ -132,6 +132,9 @@ class SteerableManager(FakeManager):
     def is_turn_active(self) -> bool:
         return self.active
 
+    def is_steerable_turn(self) -> bool:
+        return self.active  # a plain chat turn — steerable while active
+
     async def steer(self, text: str) -> None:
         self.steered.append(text)
 
@@ -316,3 +319,21 @@ def test_album_items_flush_as_single_prompt(monkeypatch):
     prompt = mgr.sent[0][1]
     assert "attachments/a.jpg" in prompt and "attachments/b.jpg" in prompt
     assert "подпись" in prompt
+
+
+def test_text_during_maintenance_turn_gets_busy_reply(monkeypatch):
+    """A message while the nightly pipeline / doctor holds the session must
+    NOT be steered into the maintenance turn — the user gets a busy reply."""
+    from d_brain.bot.handlers import chat
+
+    class MaintenanceManager(SteerableManager):
+        def is_steerable_turn(self) -> bool:
+            return False
+
+    mgr = MaintenanceManager(active=True)
+    monkeypatch.setattr(chat, "_get_manager", lambda: mgr)
+    bot = FakeBot()
+    asyncio.run(chat._dispatch_text(bot, chat_id=10, user_id=1, text="пиши короче"))
+    assert mgr.steered == []  # nothing injected into the pipeline turn
+    assert mgr.sent == []  # and no new turn forced past the lock
+    assert bot.messages and "обслуживание" in bot.messages[0][1].lower()

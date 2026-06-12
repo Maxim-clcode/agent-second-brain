@@ -434,3 +434,32 @@ def test_pane_log_precreated_owner_only_before_pipe(tmp_path, clock):
     log = tmp_path / ".dbrain" / "pane.log"
     assert log.exists()
     assert (log.stat().st_mode & 0o777) == 0o600
+
+
+# ── steering gate: maintenance turns must not swallow user input ────────
+
+
+def _hold_pane_lock(s):
+    import fcntl
+
+    fh = open(s._pane_lock, "w")
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    return fh
+
+
+def test_is_steerable_turn_distinguishes_chat_from_maintenance(tmp_path, clock):
+    s = make_session(tmp_path, FakeTmux([READY]), clock)
+    inflight = tmp_path / ".dbrain" / "inflight"
+
+    assert s.is_steerable_turn() is False  # idle: nothing to steer
+
+    fh = _hold_pane_lock(s)
+    try:
+        # lock held but no inflight → startup/recovery/control, not a turn
+        assert s.is_steerable_turn() is False
+        inflight.write_text("rid12345\n0.0\n")
+        assert s.is_steerable_turn() is True  # a chat turn
+        inflight.write_text("maint-daily\n0.0\n")
+        assert s.is_steerable_turn() is False  # the nightly pipeline
+    finally:
+        fh.close()

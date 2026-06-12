@@ -104,3 +104,21 @@ def test_process_daily_prompt_instructs_cards_and_summary(tmp_path):
     prompt = sess.prompts[0].lower()
     assert "autograph" in prompt
     assert "саммари" in prompt or "summary" in prompt
+
+
+def test_daily_processing_is_tagged_as_maintenance(tmp_path):
+    # The nightly pipeline shares the brain session with chat; its turns
+    # carry a maint- request_id so user input is never steered into them.
+    sess = FakeSession(AskResult("ok", reply='{"status": "ok"}'))
+    sess.request_ids = []
+    original_ask = sess.ask
+
+    def recording_ask(prompt, **kwargs):
+        sess.request_ids.append(kwargs.get("request_id"))
+        return original_ask(prompt, **kwargs)
+
+    sess.ask = recording_ask
+    day = _daily(tmp_path)
+    ClaudeProcessor(tmp_path, session=sess).process_daily(day)
+    assert sess.request_ids
+    assert all(r and r.startswith("maint-") for r in sess.request_ids)
