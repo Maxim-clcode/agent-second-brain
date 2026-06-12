@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Agent Second Brain" src="https://github.com/user-attachments/assets/5b3611d9-11ba-40a1-92fc-8dc78d78d75b" />
+  <img alt="Agent Second Brain" src="assets/hero.webp" />
 </p>
 
 <h1 align="center">Agent Second Brain</h1>
