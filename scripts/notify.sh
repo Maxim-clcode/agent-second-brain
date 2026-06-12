@@ -6,11 +6,16 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$PROJECT_DIR/.env"
+# Last-resort alert handler: a malformed .env line must not abort us
+# before curl. `|| true` does NOT reliably shield a sourced file under
+# errexit — drop -e around the load instead.
 if [ -f "$ENV_FILE" ]; then
+    set +e
     set -a
     # shellcheck disable=SC1090
-    . "$ENV_FILE"
+    . "$ENV_FILE" 2>/dev/null
     set +a
+    set -e
 fi
 
 MSG="${1:-d-brain alert}"

@@ -320,9 +320,9 @@ configure_git_remote() {
         read -r GITHUB_USER
     fi
 
-    git remote set-url origin "https://$GITHUB_TOKEN@github.com/$GITHUB_USER/agent-second-brain.git"
-    # The token lives in .git/config — keep that file owner-only.
+    # The token will live in .git/config — owner-only BEFORE it's written.
     chmod 600 .git/config
+    git remote set-url origin "https://$GITHUB_TOKEN@github.com/$GITHUB_USER/agent-second-brain.git"
     success "Git remote configured for push"
 }
 

@@ -162,10 +162,11 @@ class CronStore:
         self.cron_dir.mkdir(parents=True, exist_ok=True)
         payload = {"version": STORE_VERSION, "jobs": [asdict(j) for j in jobs]}
         tmp = self.jobs_file.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
-        # Prompts and chat ids are private — owner-only before the rename
-        # so a world-readable window never exists.
+        # Prompts and chat ids are private — owner-only BEFORE the payload
+        # is written, so a world-readable window never exists.
+        tmp.touch()
         os.chmod(tmp, 0o600)
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
         os.replace(tmp, self.jobs_file)
 
     @contextmanager
