@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -66,6 +66,13 @@ class Settings(BaseSettings):
         default=300.0,
         description="Retry delay for a failed one-shot ('at') job",
     )
+
+    @field_validator("runtime_dir", "vault_path", mode="after")
+    @classmethod
+    def _expand_user(cls, v: Path) -> Path:
+        # pydantic-settings keeps "~" literal; the cron CLI expanduser-s —
+        # expand here too or the bot and CLI split into different state dirs.
+        return v.expanduser()
 
     @property
     def cron_dir(self) -> Path:

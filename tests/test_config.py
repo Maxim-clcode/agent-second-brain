@@ -46,3 +46,14 @@ def test_cron_fields_have_safe_defaults():
 def test_cron_dir_lives_under_runtime_dir():
     s = _settings(runtime_dir=Path("/tmp/rt"))
     assert s.cron_dir == Path("/tmp/rt/cron")
+
+
+def test_tilde_paths_are_expanded():
+    # pydantic-settings does not expand ~ on its own; the cron CLI does
+    # expanduser — without this the bot and the CLI would silently use
+    # two different state dirs.
+    s = _settings(runtime_dir="~/.dbrain", vault_path="~/vault")
+    assert s.runtime_dir.is_absolute()
+    assert "~" not in s.runtime_dir.parts
+    assert s.vault_path.is_absolute()
+    assert "~" not in s.vault_path.parts
