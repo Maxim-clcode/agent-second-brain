@@ -54,3 +54,17 @@ def test_report_telegram_green_and_red():
     red = Doctor(sess, checks=[_bad_check]).run().to_telegram()
     assert "🔴" in red
     assert "❌" in red
+
+
+def test_run_cli_exit_codes_follow_report():
+    # upgrade.sh and the systemd OnFailure= hook key off the exit code —
+    # a failing canary must be visible as a non-zero exit.
+    from d_brain.services.doctor import run_cli
+
+    sent = []
+    ok_sess = FakeSession(AskResult("ok", reply="DBRAIN_OK"))
+    assert run_cli(ok_sess, checks=[_ok_check], alert=sent.append) == 0
+
+    bad_sess = FakeSession(AskResult("logged_out"))
+    assert run_cli(bad_sess, checks=[], alert=sent.append) == 1
+    assert len(sent) == 2  # the telegram report goes out either way

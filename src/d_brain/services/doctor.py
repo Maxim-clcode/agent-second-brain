@@ -113,6 +113,15 @@ def check_env(settings: Any) -> CheckResult:
     )
 
 
+def run_cli(session: Any, *, checks: list, alert: Any) -> int:
+    """Run the checks, deliver the report, map health to an exit code —
+    upgrade.sh and the systemd OnFailure= hook key off that code."""
+    report = Doctor(session, checks=checks).run()
+    alert(report.to_telegram())
+    logger.info("doctor: ok=%s", report.ok)
+    return 0 if report.ok else 1
+
+
 def main() -> None:  # pragma: no cover
     logging.basicConfig(level=logging.INFO)
     from d_brain.config import get_settings
@@ -126,9 +135,9 @@ def main() -> None:  # pragma: no cover
         lambda: check_claude_version(),
         lambda: check_env(settings),
     ]
-    report = Doctor(session, checks=checks).run()
-    _telegram_alerter(settings)(report.to_telegram())
-    logger.info("doctor: ok=%s", report.ok)
+    raise SystemExit(
+        run_cli(session, checks=checks, alert=_telegram_alerter(settings))
+    )
 
 
 if __name__ == "__main__":
