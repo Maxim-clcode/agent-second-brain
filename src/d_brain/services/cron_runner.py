@@ -69,6 +69,7 @@ class CronRunner:
         self.max_consecutive_errors = max_consecutive_errors
         self.retry_seconds = retry_seconds
         self.clock = clock or (lambda: datetime.now(UTC))
+        self._warned_dormant: set[str] = set()
 
     # ── scheduling ───────────────────────────────────────────────────
 
@@ -86,6 +87,22 @@ class CronRunner:
         def advance(jobs: list[CronJob]) -> None:
             for job in jobs:
                 if not job.enabled or not job.state.next_run:
+                    # A recurring job without next_run can never fire —
+                    # broken state (hand-edited jobs.json), unlike an
+                    # at-job, which legitimately ends with None. Warn
+                    # once, not every tick.
+                    if (
+                        job.enabled
+                        and job.schedule.kind != "at"
+                        and job.id not in self._warned_dormant
+                    ):
+                        self._warned_dormant.add(job.id)
+                        logger.warning(
+                            "job %s is enabled but has no next_run — "
+                            "it will never fire; re-add or enable it "
+                            "via the cron CLI",
+                            job.id,
+                        )
                     continue
                 try:
                     due_at = datetime.fromisoformat(job.state.next_run)

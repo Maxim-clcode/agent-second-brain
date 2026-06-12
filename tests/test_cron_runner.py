@@ -361,3 +361,33 @@ def test_wrap_job_prompt_contract():
     assert "d_brain.cron" in wrapped
     # marker instruction belongs to ask(wrap=True), never duplicated here
     assert "<<<R:" not in wrapped
+
+
+def test_dormant_recurring_job_warns_once(tmp_path, caplog):
+    # A recurring job with next_run=None can never fire again — that is
+    # a broken state (hand-edited jobs.json), not a completed one-shot.
+    # Surface it once, do not spam every tick.
+    store = _store(tmp_path)
+    _add_job(store, "stuck")
+    store.mutate(lambda jobs: setattr(jobs[0].state, "next_run", None))
+    runner = _runner(store, FakeSession([]))
+
+    with caplog.at_level("WARNING"):
+        assert runner.claim_due(NOW) == []
+        assert runner.claim_due(NOW) == []
+
+    warnings = [r for r in caplog.records if "stuck" in r.getMessage()]
+    assert len(warnings) == 1
+
+
+def test_completed_one_shot_does_not_warn(tmp_path, caplog):
+    # at-jobs legitimately end with next_run=None after success.
+    store = _store(tmp_path)
+    _add_job(store, "done", kind="at")
+    store.mutate(lambda jobs: setattr(jobs[0].state, "next_run", None))
+    runner = _runner(store, FakeSession([]))
+
+    with caplog.at_level("WARNING"):
+        assert runner.claim_due(NOW) == []
+
+    assert [r for r in caplog.records if "done" in r.getMessage()] == []
