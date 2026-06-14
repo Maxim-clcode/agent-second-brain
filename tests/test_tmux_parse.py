@@ -391,3 +391,24 @@ def test_survey_prompt_detected():
     )
     assert has_survey_prompt(pane)
     assert not has_survey_prompt("❯\n  ⏵⏵ bypass permissions on\n")
+
+
+def test_is_working_detects_new_spinner_format():
+    # Claude Code dropped the "esc to interrupt" hint; the live turn now
+    # shows a spinner with an elapsed-time + token counter.
+    from d_brain.services.tmux_parse import is_working
+
+    assert is_working("reply so far\n✢ Razzle-dazzling… (44s · ↓1.8k tokens)\n")
+    assert is_working("✽ Booping… (55s · ↓4.1k tokens)\n")
+
+
+def test_is_working_still_detects_legacy_hint():
+    from d_brain.services.tmux_parse import is_working
+
+    assert is_working("  ✻ Working…  (esc to interrupt)\n")
+
+
+def test_is_working_false_at_idle():
+    from d_brain.services.tmux_parse import is_working
+
+    assert not is_working("❯\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n")

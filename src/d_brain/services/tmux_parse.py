@@ -121,7 +121,12 @@ _STARTING_RE = re.compile(r"Claude Code v\d", re.I)
 # for the whole turn, so its absence + an idle ❯ is the idle signal. The
 # bypass footer is ALWAYS on screen under --dangerously-skip-permissions and
 # must never be used as an idle signal by itself.
-_WORKING_RE = re.compile(r"esc to interrupt")
+# Two working signatures: the legacy "esc to interrupt" hint, and the newer
+# spinner with a live elapsed-time + token counter, e.g.
+# "✢ Razzle-dazzling… (44s · ↓1.8k tokens)". Newer Claude Code dropped the
+# hint entirely, so matching only the old string blinded the stall detector
+# and false-killed every turn longer than stall_timeout.
+_WORKING_RE = re.compile(r"esc to interrupt|\(\d+s\s*·")
 # Idle = a BARE ❯ on its own line (empty input). A menu selector ("❯ 1. Yes…")
 # has text after the chevron and must NOT count — otherwise a turn stuck on an
 # approval/menu prompt would be mistaken for completion (wrap=False).
