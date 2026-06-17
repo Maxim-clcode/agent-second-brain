@@ -14,14 +14,13 @@
   },
   "integrations": {
     "telegram": "Voice/text/photo capture",
-    "todoist": "Task management via MCP",
     "obsidian": "PKM vault storage",
-    "deepgram": "Voice transcription"
+    "deepgram": "Voice transcription",
+    "cron": "Built-in reminder/schedule engine"
   },
   "keywords": [
     "voice-capture",
     "telegram-bot",
-    "todoist",
     "obsidian",
     "pkm",
     "goals",
