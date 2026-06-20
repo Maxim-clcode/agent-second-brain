@@ -38,7 +38,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_TICK = 15.0
 DEFAULT_STALL_THRESHOLD = 300.0  # 5 min stuck without visible work ⇒ wedged
 DEFAULT_MIN_DISK = 500_000_000  # 500 MB
-DEFAULT_ALERT_COOLDOWN = 3600.0  # re-alert a persistent fault at most hourly
+DEFAULT_ALERT_COOLDOWN = 3600.0  # first re-alert of a persistent fault: 1h
+DEFAULT_ALERT_COOLDOWN_MAX = 12 * 3600.0  # back-off cap (doubles 1h→2h→…→12h)
 
 _SERVICEABLE = {
     PaneState.READY,
@@ -61,6 +62,7 @@ class Watchdog:
         stall_threshold: float = DEFAULT_STALL_THRESHOLD,
         min_disk_bytes: int = DEFAULT_MIN_DISK,
         alert_cooldown: float = DEFAULT_ALERT_COOLDOWN,
+        alert_cooldown_max: float = DEFAULT_ALERT_COOLDOWN_MAX,
     ) -> None:
         self.session = session
         self.runtime_dir = Path(runtime_dir)
@@ -74,10 +76,12 @@ class Watchdog:
         self._stall_threshold = stall_threshold
         self._min_disk = min_disk_bytes
         self._alert_cooldown = alert_cooldown
+        self._alert_cooldown_max = alert_cooldown_max
         self._inflight = self.runtime_dir / "inflight"
         self._status = self.runtime_dir / "STATUS.md"
         self._last_alert_key: str | None = None
         self._last_alert_ts = 0.0
+        self._alert_repeats = 0
         self._stuck_since: float | None = None
 
     def _is_hung(self, state: PaneState) -> bool:
@@ -95,11 +99,19 @@ class Watchdog:
 
     def _maybe_alert(self, key: str, msg: str) -> None:
         now = self._clock()
-        if (
-            self._last_alert_key == key
-            and now - self._last_alert_ts < self._alert_cooldown
-        ):
-            return
+        if self._last_alert_key == key:
+            # Same persistent fault: back off exponentially (1h, 2h, 4h … up to
+            # the cap) so an overnight outage sends a few escalating reminders
+            # instead of one identical message every hour.
+            cooldown = min(
+                self._alert_cooldown * (2**self._alert_repeats),
+                self._alert_cooldown_max,
+            )
+            if now - self._last_alert_ts < cooldown:
+                return
+            self._alert_repeats += 1
+        else:
+            self._alert_repeats = 0
         self._alert_fn(msg)
         self._last_alert_key = key
         self._last_alert_ts = now
@@ -107,6 +119,7 @@ class Watchdog:
     def _note_good(self) -> None:
         # Returning to a good state re-arms alerts for the next incident.
         self._last_alert_key = None
+        self._alert_repeats = 0
 
     def _write_status(self, state: str) -> None:
         try:

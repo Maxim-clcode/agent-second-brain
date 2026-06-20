@@ -184,6 +184,22 @@ def test_alert_refires_after_recovery(tmp_path):
     assert len(alerts) == 2
 
 
+def test_persistent_fault_alert_backs_off(tmp_path):
+    """A persistent fault must not spam at a fixed hourly rate — the re-alert
+    interval doubles (1h, 2h, 4h…), so an 8-hour overnight outage sends a few
+    escalating reminders, not one every hour."""
+    sess = FakeSession(state=PaneState.LOGGED_OUT)
+    alerts = []
+    clock = {"now": 0.0}
+    wd = make_wd(tmp_path, sess, alerts=alerts, clock=clock)
+    # Tick every 30 min for 8 hours (16 ticks).
+    for _ in range(16):
+        wd.check_once()
+        clock["now"] += 1800.0
+    # Fixed-hourly would fire ~8 times; back-off fires at 0h,1h,3h,7h = 4.
+    assert len(alerts) == 4
+
+
 # ── disk + status ─────────────────────────────────────────────────────────
 
 
