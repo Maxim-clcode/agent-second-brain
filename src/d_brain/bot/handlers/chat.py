@@ -276,6 +276,31 @@ async def _flush_album(bot: Bot, chat_id: int, user_id: int, group_id: str) -> N
 # --- Handlers ---
 
 
+@router.message(F.location)
+async def handle_chat_location(message: Message) -> None:
+    """Detect timezone from shared location and save it."""
+    if not message.location:
+        return
+
+    from d_brain.services.timezone import set_user_tz
+
+    settings = get_settings()
+    try:
+        tz_name = await asyncio.to_thread(
+            set_user_tz,
+            settings.vault_path,
+            message.location.latitude,
+            message.location.longitude,
+        )
+        await message.answer(
+            f"📍 Локация получена. Твой часовой пояс обновлён: <b>{tz_name}</b>\n"
+            "Кнопка «Собрать план» теперь будет работать по местному времени."
+        )
+    except Exception:
+        logger.exception("Failed to detect timezone from location")
+        await message.answer("Не удалось определить часовой пояс по локации.")
+
+
 @router.message(F.voice)
 async def handle_chat_voice(message: Message, bot: Bot) -> None:
     """Handle voice messages in private chat."""

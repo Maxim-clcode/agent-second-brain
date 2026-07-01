@@ -51,7 +51,11 @@ Curated knowledge that persists across sessions. Part of the 3-layer memory arch
 
 | Name | Role | Contact | Notes |
 |------|------|---------|-------|
-| [Name] | [Role] | [Telegram/Email] | [Context] |
+| Кристина | SMM-специалист | — | Сотрудник |
+| Ника | Топ-маркетолог | — | Сотрудник |
+| Никита | Performance-маркетинг | — | Сотрудник |
+
+Задачи сотрудников: [[business/network/team]]
 
 ## Learnings
 
