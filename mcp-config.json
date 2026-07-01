@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "ticktick": {
+      "type": "stdio",
+      "command": "/usr/bin/node",
+      "args": ["/usr/lib/node_modules/@ticktick/mcp-server/build/index.js"],
+      "env": {
+        "API_TOKEN": "tp_370240d2191b485496c72cc7c5522326",
+        "API_DOMAIN": "api.ticktick.com"
+      }
+    },
+    "notion": {
+      "type": "stdio",
+      "command": "/usr/bin/notion-mcp-server",
+      "env": {
+        "OPENAPI_MCP_HEADERS": "{\"Authorization\": \"Bearer ntn_c57737162465ObprBMHdaXLJ5mPvVPO8T3Hyk0mmTUJ6Eh\", \"Notion-Version\": \"2022-06-28\"}"
+      }
+    }
+  }
+}

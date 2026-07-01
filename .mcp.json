@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "ticktick": {
+      "type": "stdio",
+      "command": "/usr/bin/node",
+      "args": [
+        "/usr/lib/node_modules/@ticktick/mcp-server/build/index.js"
+      ],
+      "env": {
+        "API_TOKEN": "tp_370240d2191b485496c72cc7c5522326",
+        "API_DOMAIN": "api.ticktick.com"
+      }
+    }
+  }
+}

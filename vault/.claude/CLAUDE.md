@@ -215,6 +215,70 @@ Reports use Telegram HTML:
 | `/organize` | Organize vault |
 | `/graph` | Analyze vault links |
 
+## Task Management (PM Backlog)
+
+**IMPORTANT:** When the user describes a task, idea, or something they need to do — ALWAYS use the `/pm-assistant` skill. Do NOT save tasks to vault files.
+
+**The old database "Идеи и Задачи" has been deleted.** Never reference it.
+
+All tasks go to **PM Backlog** (Notion Database ID: `22876284-e92f-4866-a908-3a3bda425637`).
+
+### Triggers for `/pm-project` (roadmap — use INSTEAD of pm-assistant):
+- User mentions a project they want to start or prioritize
+- Phrases: "проект в приоритете", "взять в работу", "дорожная карта", "распланируй проект", "когда закончим", "расставь задачи по проекту", "покажи дорожную карту"
+- User asks how long a project will take or wants a schedule for multiple weeks ahead
+- User says they can't do a task or need to reschedule: "не успею", "не смогу", "сдвинь", "отпуск", "болею", "форс-мажор", "перенеси задачи", "перестрой даты", "сдвинь всё"
+
+### Triggers for `/pm-assistant` (single task — use when NOT a multi-week project):
+- User mentions a single task, idea, meeting, call, deadline
+- Phrases: "нужно", "сделать", "задача", "напомни", "поставь", "запланируй", "добавь"
+- Voice messages describing a single work item
+
+### PM Backlog Fields
+| Field | Values |
+|-------|--------|
+| `Задача` | Task title (required) |
+| `Приоритет` | P1 / P2 / P3 / P4 |
+| `Статус` | Бэклог / Спринт неделя / Выполняют сотрудники / Выполнено / Отменено |
+| `Сложность` | Простая / Средняя / Сложная |
+| `Дедлайн` | date |
+| `Заметки` | context |
+| `Ответственный` | Максим / Никита / Кристина / Ника |
+| `Родительская задача` | parent task name (for subtasks only) |
+| `Источник` | Platrum / Telegram / Ручной ввод |
+
+### Дорожные карты проектов
+
+Сохранённые дорожные карты: `/home/brain/projects/agent-second-brain/data/roadmaps/`
+
+При планировании дня (`📅 Собрать план`): если в папке `roadmaps/` есть файлы —
+прочитай их и проверь задачи по датам:
+- Вычисли `WEEK_START` = понедельник текущей недели (YYYY-MM-DD)
+- Вычисли `WEEK_END` = пятница текущей недели (YYYY-MM-DD)
+- Найди задачи из дорожной карты, у которых `date >= WEEK_START` И `date <= WEEK_END`
+- Только эти задачи (и только если их статус в PM Backlog сейчас «Бэклог») обнови на «Спринт недели»
+- Задачи с `date > WEEK_END` — не трогать, они остаются «Бэклог» до своей недели
+
+### Статус «Выполняют сотрудники»
+
+Когда пользователь говорит что задачу делают другие — переноси статус на «Выполняют сотрудники».
+
+**Триггерные фразы:**
+- «поставил задачу», «передал», «делегировал», «отдал»
+- «выполняют сотрудники», «делают сотрудники», «занимаются ребята»
+- «передал своим», «поставил команде», «поручил»
+- «взял подрядчик», «делает [имя]», «[имя] занимается»
+
+**Действие:** найди задачу в PM Backlog по названию, обнови статус на «Выполняют сотрудники».
+Если пользователь уточняет кто делает или на какой стадии — добавь это в тело страницы через:
+```
+curl -s -X PATCH "https://api.notion.com/v1/blocks/{PAGE_ID}/children" \
+  -H "Authorization: Bearer ntn_c57737162465ObprBMHdaXLJ5mPvVPO8T3Hyk0mmTUJ6Eh" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d '{"children": [{"object": "block", "type": "paragraph", "paragraph": {"rich_text": [{"type": "text", "text": {"content": "👥 {ДАТА}: {КОНТЕКСТ}"}}]}}]}'
+```
+
 ## Customization
 
 For personal overrides: create `CLAUDE.local.md`
