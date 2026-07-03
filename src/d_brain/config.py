@@ -104,6 +104,12 @@ class Settings(BaseSettings):
         return self.vault_path / "thoughts"
 
 
+_settings: Settings | None = None
+
+
 def get_settings() -> Settings:
-    """Get application settings instance."""
-    return Settings()
+    """Get application settings instance (cached singleton)."""
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings

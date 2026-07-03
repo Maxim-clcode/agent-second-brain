@@ -43,12 +43,14 @@ def _persisted_name(settings: Settings) -> str:
     return name
 
 
+_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+
+
 def _build_session(
     settings: Settings, *, session_name: str, runtime_dir: Path
 ) -> ClaudeSession:
-    project_root = settings.vault_path.parent
-    mcp = project_root / "mcp-config.json"
-    brain_prompt = project_root / "deploy" / "brain-system.md"
+    mcp = _PROJECT_ROOT / "mcp-config.json"
+    brain_prompt = _PROJECT_ROOT / "deploy" / "brain-system.md"
     # Boot assertion: without the persona file the brain would silently start
     # as a vanilla agent (no identity, no reply contract). Refuse loudly.
     if (
