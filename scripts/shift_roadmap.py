@@ -106,31 +106,39 @@ def ticktick_find_task(title: str, search_date: date) -> dict | None:
 
 
 def ticktick_update_task(task_id: str, project_id: str, new_date: date, start_time: str, end_time: str) -> bool:
-    """Update task date in TickTick."""
+    """Update task date in TickTick by task_id."""
     vl = ZoneInfo("Asia/Vladivostok")
     sh, sm = map(int, start_time.split(":"))
     eh, em = map(int, end_time.split(":"))
     start_dt = datetime(new_date.year, new_date.month, new_date.day, sh, sm, tzinfo=vl)
     end_dt = datetime(new_date.year, new_date.month, new_date.day, eh, em, tzinfo=vl)
 
+    body: dict = {
+        "id": task_id,
+        "startDate": start_dt.isoformat(),
+        "dueDate": end_dt.isoformat(),
+        "isAllDay": False,
+        "timeZone": "Asia/Vladivostok",
+    }
+    if project_id:
+        body["projectId"] = project_id
+
     try:
         r = httpx.post(
             f"https://api.ticktick.com/open/v1/task/{task_id}",
             headers={"Authorization": f"Bearer {TICKTICK_TOKEN}", "Content-Type": "application/json"},
-            json={
-                "id": task_id,
-                "projectId": project_id,
-                "startDate": start_dt.isoformat(),
-                "dueDate": end_dt.isoformat(),
-                "isAllDay": False,
-                "timeZone": "Asia/Vladivostok",
-            },
+            json=body,
             timeout=15,
         )
         return r.status_code == 200
     except Exception as e:
         print(f"  TickTick update error: {e}")
         return False
+
+
+def ticktick_update_by_stored_id(ticktick_id: str, new_date: date, start_time: str, end_time: str) -> bool:
+    """Update TickTick task using stored ID from roadmap JSON — no search needed."""
+    return ticktick_update_task(ticktick_id, "", new_date, start_time, end_time)
 
 
 def send_telegram(text: str) -> None:
@@ -220,19 +228,30 @@ def process_roadmap(path: Path, today: date) -> bool:
             task = dict(task)
             task["date"] = new_date.isoformat()
 
-            # Update TickTick
-            tt_task = ticktick_find_task(task["name"], task_date)
-            if tt_task:
-                ok = ticktick_update_task(
-                    tt_task["id"],
-                    tt_task.get("projectId", ""),
-                    new_date,
+            # Update TickTick — prefer stored ticktick_id, fall back to name search
+            stored_id = task.get("ticktick_id", "")
+            if stored_id:
+                ok = ticktick_update_by_stored_id(
+                    stored_id, new_date,
                     task.get("start", "09:00"),
                     task.get("end", "10:00"),
                 )
-                print(f"    TickTick {'✅' if ok else '❌'}: {task['name'][:50]} → {new_date}")
+                print(f"    TickTick(id) {'✅' if ok else '❌'}: {task['name'][:50]} → {new_date}")
             else:
-                print(f"    TickTick not found: {task['name'][:50]}")
+                tt_task = ticktick_find_task(task["name"], task_date)
+                if tt_task:
+                    ok = ticktick_update_task(
+                        tt_task["id"],
+                        tt_task.get("projectId", ""),
+                        new_date,
+                        task.get("start", "09:00"),
+                        task.get("end", "10:00"),
+                    )
+                    print(f"    TickTick(search) {'✅' if ok else '❌'}: {task['name'][:50]} → {new_date}")
+                    if ok:
+                        task["ticktick_id"] = tt_task["id"]  # store for next time
+                else:
+                    print(f"    TickTick not found: {task['name'][:50]}")
 
             # Update Notion status if needed (re-evaluate week)
             if notion_id:
@@ -311,17 +330,30 @@ def force_shift_roadmap(path: Path, days: int, from_date: date | None = None) ->
             task = dict(task)
             task["date"] = new_date.isoformat()
 
-            # Update TickTick
-            tt_task = ticktick_find_task(task["name"], task_date)
-            if tt_task:
-                ok = ticktick_update_task(
-                    tt_task["id"],
-                    tt_task.get("projectId", ""),
-                    new_date,
+            # Update TickTick — prefer stored ticktick_id, fall back to name search
+            stored_id = task.get("ticktick_id", "")
+            if stored_id:
+                ok = ticktick_update_by_stored_id(
+                    stored_id, new_date,
                     task.get("start", "09:00"),
                     task.get("end", "10:00"),
                 )
-                print(f"    TickTick {'✅' if ok else '❌'}: {task['name'][:50]} → {new_date}")
+                print(f"    TickTick(id) {'✅' if ok else '❌'}: {task['name'][:50]} → {new_date}")
+            else:
+                tt_task = ticktick_find_task(task["name"], task_date)
+                if tt_task:
+                    ok = ticktick_update_task(
+                        tt_task["id"],
+                        tt_task.get("projectId", ""),
+                        new_date,
+                        task.get("start", "09:00"),
+                        task.get("end", "10:00"),
+                    )
+                    print(f"    TickTick(search) {'✅' if ok else '❌'}: {task['name'][:50]} → {new_date}")
+                    if ok:
+                        task["ticktick_id"] = tt_task["id"]  # store for next time
+                else:
+                    print(f"    TickTick not found: {task['name'][:50]}")
 
             # Update Notion status
             if notion_id:
