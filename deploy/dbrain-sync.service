@@ -1,0 +1,10 @@
+[Unit]
+Description=d-brain Notion↔TickTick sync
+OnFailure=dbrain-notify@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/agent-second-brain
+ExecStart=%h/projects/agent-second-brain/.venv/bin/python scripts/notion_ticktick_sync.py
+EnvironmentFile=-%h/projects/agent-second-brain/.env
+Environment=TZ=Asia/Vladivostok
