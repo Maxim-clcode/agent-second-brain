@@ -2,11 +2,74 @@
 
 from datetime import datetime, timedelta
 
+import httpx
 from aiogram import Bot, F, Router
 from aiogram.types import CallbackQuery, Message
 
 from d_brain.bot.keyboards import get_plan_day_keyboard
 from d_brain.services.workday import next_workday
+
+_NOTION_TOKEN = "ntn_c57737162465ObprBMHdaXLJ5mPvVPO8T3Hyk0mmTUJ6Eh"
+_PM_BACKLOG_DB = "22876284-e92f-4866-a908-3a3bda425637"
+
+
+def _count_notion_backlog() -> int | None:
+    """Hard Notion API call — returns exact count of non-done tasks in PM Backlog.
+    Returns None on error so the prompt still works without the count.
+    """
+    try:
+        r = httpx.post(
+            f"https://api.notion.com/v1/databases/{_PM_BACKLOG_DB}/query",
+            headers={
+                "Authorization": f"Bearer {_NOTION_TOKEN}",
+                "Notion-Version": "2022-06-28",
+                "Content-Type": "application/json",
+            },
+            json={
+                "filter": {
+                    "and": [
+                        {"property": "Статус", "select": {"does_not_equal": "Выполнено"}},
+                        {"property": "Статус", "select": {"does_not_equal": "Отменено"}},
+                    ]
+                },
+                "page_size": 1,  # we only need total count via has_more + pagination
+            },
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        # Count all pages via pagination
+        count = len(data.get("results", []))
+        cursor = data.get("next_cursor")
+        while cursor:
+            r2 = httpx.post(
+                f"https://api.notion.com/v1/databases/{_PM_BACKLOG_DB}/query",
+                headers={
+                    "Authorization": f"Bearer {_NOTION_TOKEN}",
+                    "Notion-Version": "2022-06-28",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "filter": {
+                        "and": [
+                            {"property": "Статус", "select": {"does_not_equal": "Выполнено"}},
+                            {"property": "Статус", "select": {"does_not_equal": "Отменено"}},
+                        ]
+                    },
+                    "page_size": 100,
+                    "start_cursor": cursor,
+                },
+                timeout=10,
+            )
+            if r2.status_code != 200:
+                break
+            d2 = r2.json()
+            count += len(d2.get("results", []))
+            cursor = d2.get("next_cursor")
+        return count
+    except Exception:
+        return None
 
 router = Router(name="buttons")
 
@@ -232,13 +295,33 @@ async def callback_summary_start(callback: CallbackQuery, bot: Bot) -> None:
 
     if not callback.from_user:
         return
-    prompt = _build_summary_prompt(today_str, today_iso, next_day_str, next_day_iso)
+    backlog_count = _count_notion_backlog()
+    prompt = _build_summary_prompt(today_str, today_iso, next_day_str, next_day_iso, backlog_count)
     await _process_and_reply(bot, callback.message.chat.id, callback.from_user.id, prompt)
 
 
-def _build_summary_prompt(today_str: str, today_iso: str, next_day_str: str, next_day_iso: str) -> str:
+def _build_summary_prompt(
+    today_str: str,
+    today_iso: str,
+    next_day_str: str,
+    next_day_iso: str,
+    backlog_count: int | None = None,
+) -> str:
     TICKTICK_ALL_DB = "8a215823-eb16-835b-9876-81806599e224"
     PM_BACKLOG_DB = "22876284-e92f-4866-a908-3a3bda425637"
+
+    if backlog_count is not None:
+        backlog_hint = (
+            f"ВАЖНО: Notion API подтвердил — в бэклоге сейчас ровно {backlog_count} активных задач "
+            f"(статус не «Выполнено» и не «Отменено»). "
+            "Если MCP вернул меньше — пагинируй через cursor пока не получишь все. "
+            "Сообщать «бэклог пуст» можно ТОЛЬКО если получил 0 задач И это совпадает с подтверждённым числом.\n"
+        )
+    else:
+        backlog_hint = (
+            "Если PM Backlog вернул 0 задач — это подозрительно. Запроси ещё раз перед тем как сказать «бэклог пуст».\n"
+        )
+
     return (
         f"Максим хочет подвести итог дня — {today_str}.\n\n"
         "Выполни строго по шагам:\n\n"
@@ -248,7 +331,8 @@ def _build_summary_prompt(today_str: str, today_iso: str, next_day_str: str, nex
         "— Checkbox = true → ВЫПОЛНЕНО\n"
         "— Checkbox = false → НЕ ВЫПОЛНЕНО\n\n"
         f"ШАГ 2. Запроси PM Backlog (Database ID: {PM_BACKLOG_DB}) — "
-        "все задачи (любой статус, кроме «Выполнено» и «Отменено»). Запомни название и page_id каждой.\n\n"
+        "все задачи (любой статус, кроме «Выполнено» и «Отменено»). Запомни название и page_id каждой.\n"
+        f"{backlog_hint}\n"
         "ШАГ 3. Покажи Максиму срез одним сообщением:\n"
         "«✅ Вижу выполненными: Задача A, Задача B\n\n"
         "❓ Не отмечены выполненными: Задача C, Задача D\n\n"
@@ -284,6 +368,7 @@ def _build_summary_prompt(today_str: str, today_iso: str, next_day_str: str, nex
         "Из результата выпиши ВСЕ задачи у которых есть startDate — это уже запланировано, не предлагай их повторно.\n"
         "Запомни названия уже запланированных задач — они НЕ кандидаты для добавления.\n\n"
         f"7б. Запроси PM Backlog — задачи со статусом «Бэклог» и «Спринт неделя».\n"
+        f"{backlog_hint}"
         "СТРОГО: кандидатами могут быть ТОЛЬКО задачи из PM Backlog. Не добавляй задачи из контекста разговора, "
         "не придумывай задачи — только то, что реально есть в PM Backlog.\n"
         "Исключи задачи, чьё название совпадает (полностью или частично) с уже запланированными из шага 7а.\n\n"

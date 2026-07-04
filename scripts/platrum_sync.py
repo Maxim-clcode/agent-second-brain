@@ -10,6 +10,7 @@ then sends a Telegram notification.
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -33,15 +34,46 @@ VL_TZ = ZoneInfo("Asia/Vladivostok")
 STATE_FILE = Path(__file__).parent.parent / "data" / "platrum_seen.json"
 
 
-def load_seen() -> set:
+def load_state() -> tuple[set, dict]:
+    """Return (seen_ids, partial_ids).
+    seen   = both TT+Notion confirmed
+    partial = {task_id: {"tt_done": bool, "attempts": int}}
+    """
     if STATE_FILE.exists():
-        return set(json.loads(STATE_FILE.read_text()))
-    return set()
+        raw = json.loads(STATE_FILE.read_text())
+        if isinstance(raw, list):
+            # Legacy format: plain list of IDs — migrate
+            return set(raw), {}
+        return set(raw.get("seen", [])), raw.get("partial", {})
+    return set(), {}
+
+
+def save_state(seen: set, partial: dict) -> None:
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(json.dumps({"seen": sorted(seen), "partial": partial}, indent=2))
+
+
+# Legacy helpers kept for callers
+def load_seen() -> set:
+    seen, _ = load_state()
+    return seen
 
 
 def save_seen(seen: set) -> None:
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps(sorted(seen)))
+    _, partial = load_state()
+    save_state(seen, partial)
+
+
+def _with_retry(fn, *args, retries: int = 3, delay: float = 5.0, **kwargs) -> bool:
+    for attempt in range(retries):
+        try:
+            if fn(*args, **kwargs):
+                return True
+        except Exception as exc:
+            print(f"  attempt {attempt + 1} error: {exc}")
+        if attempt < retries - 1:
+            time.sleep(delay)
+    return False
 
 
 def platrum_tasks() -> list:
@@ -119,26 +151,62 @@ def notify(text: str) -> None:
 
 
 def main():
-    seen = load_seen()
+    seen, partial = load_state()
     tasks = platrum_tasks()
 
     # First run: mark all existing as seen to avoid flooding
-    if not seen:
+    if not seen and not partial:
         seen = {str(t["id"]) for t in tasks}
-        save_seen(seen)
+        save_state(seen, {})
         print(f"First run: {len(seen)} tasks marked as seen. Will notify about new ones next time.")
         return
 
+    # --- Retry partial (TickTick succeeded before, Notion failed) ---
+    task_map = {str(t["id"]): t for t in tasks}
+    retried = []
+    for task_id, info in list(partial.items()):
+        task = task_map.get(task_id)
+        if not task:
+            # Task no longer in Platrum (deleted/finished) — drop
+            del partial[task_id]
+            continue
+
+        name = task["name"]
+        description = task.get("description") or ""
+        is_important = task.get("is_important", False)
+        finish_dt = datetime.fromisoformat(task["finish_date"].replace("Z", "+00:00"))
+        finish_local = finish_dt.astimezone(VL_TZ)
+        deadline_date = finish_local.date().isoformat()
+
+        attempts = info.get("attempts", 0) + 1
+        nt_ok = _with_retry(add_notion, name, description, deadline_date, is_important)
+        if nt_ok:
+            seen.add(task_id)
+            del partial[task_id]
+            print(f"Retried Notion OK [{task_id}]: {name}")
+            notify(f"✅ <b>Notion синхронизирован (retry #{attempts})</b>\n📌 {name}")
+        else:
+            partial[task_id]["attempts"] = attempts
+            if attempts >= 5:
+                notify(f"🚨 <b>Notion sync failed {attempts}x</b> — задача потеряна:\n📌 {name}")
+                del partial[task_id]
+                seen.add(task_id)
+            print(f"Retry Notion FAIL [{task_id}] attempt {attempts}: {name}")
+        retried.append(task_id)
+
+    # --- Process truly new tasks ---
     new_tasks = [
         t for t in tasks
         if str(t["id"]) not in seen
+        and str(t["id"]) not in partial
         and t.get("finish_date")
         and not t.get("is_finished")
         and t.get("deletion_date") is None
     ]
 
-    if not new_tasks:
+    if not new_tasks and not retried:
         print("No new Platrum tasks with deadlines.")
+        save_state(seen, partial)
         return
 
     for task in new_tasks:
@@ -154,10 +222,18 @@ def main():
         finish_iso = task["finish_date"].replace("Z", "+00:00")
         start_iso = task["start_date"].replace("Z", "+00:00") if task.get("start_date") else None
 
-        tt_ok = add_ticktick(name, description, start_iso, finish_iso, is_important)
-        nt_ok = add_notion(name, description, deadline_date, is_important)
+        tt_ok = _with_retry(add_ticktick, name, description, start_iso, finish_iso, is_important)
+        nt_ok = _with_retry(add_notion, name, description, deadline_date, is_important)
 
-        seen.add(task_id)
+        if tt_ok and nt_ok:
+            seen.add(task_id)
+        elif tt_ok and not nt_ok:
+            # TickTick done, Notion failed — retry Notion next run
+            partial[task_id] = {"tt_done": True, "attempts": 1}
+            seen.add(task_id)  # prevent re-adding to TickTick
+        else:
+            # TickTick failed — retry everything next run (don't add to seen)
+            print(f"  TickTick failed for [{task_id}] — will retry next run")
 
         tt_icon = "✅" if tt_ok else "❌"
         nt_icon = "✅" if nt_ok else "❌"
@@ -168,11 +244,12 @@ def main():
             f"📌 {name}\n"
             f"📅 Срок: {deadline_str}\n"
             f"{tt_icon} TickTick  {nt_icon} Notion"
+            + ("" if (tt_ok and nt_ok) else "\n⚠️ Неполная синхронизация — повторю при следующем запуске")
         )
-        print(f"Synced [{task_id}]: {name} (deadline {deadline_date})")
+        print(f"Synced [{task_id}]: {name} tt={tt_ok} nt={nt_ok}")
 
-    save_seen(seen)
-    print(f"Done. {len(new_tasks)} task(s) synced.")
+    save_state(seen, partial)
+    print(f"Done. {len(new_tasks)} new task(s), {len(retried)} retried.")
 
 
 if __name__ == "__main__":
