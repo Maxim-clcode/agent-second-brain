@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""TickTick ↔ Notion continuous sync — runs every 10 min via dbrain-sync.timer.
+
+For each active Notion PM Backlog task with a "Дедлайн":
+  - In current Mon–Fri week + task exists in TickTick  → date-sync TT→Notion, status = Спринт неделя
+  - In current Mon–Fri week + task missing from TickTick → find free slot, create in TT, status = Спринт неделя
+  - In current Mon–Fri week + no free slot              → Telegram conflict warning
+  - Outside current week                                → status = Бэклог
+
+Duration: Простая = 30 min, Средняя = 60 min (default).
+"""
+
+from __future__ import annotations
+
+import os
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
+
+import holidays
+import httpx
+
+# ── Config ──────────────────────────────────────────────────────────────────
+
+NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "ntn_c57737162465ObprBMHdaXLJ5mPvVPO8T3Hyk0mmTUJ6Eh")
+NOTION_DB = "22876284-e92f-4866-a908-3a3bda425637"
+TICKTICK_TOKEN = os.environ.get("TICKTICK_TOKEN", "tp_370240d2191b485496c72cc7c5522326")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8945688412:AAFf5U8JtSScWVT_ex7u2T5M9Zvwj2dKZ8Y")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "257352741")
+
+VL = ZoneInfo("Asia/Vladivostok")
+UTC = ZoneInfo("UTC")
+RU_HOLIDAYS = holidays.Russia()
+
+DURATION_MIN: dict[str, int] = {"Простая": 30, "Средняя": 60}
+DEFAULT_DURATION = 60
+BUFFER_MIN = 15  # gap between tasks
+WORK_BLOCKS = [(9 * 60, 13 * 60), (14 * 60, 18 * 60)]  # minutes from midnight, excl. lunch
+
+NOTION_HDRS = {
+    "Authorization": f"Bearer {NOTION_TOKEN}",
+    "Notion-Version": "2022-06-28",
+    "Content-Type": "application/json",
+}
+TT_HDRS = {
+    "Authorization": f"Bearer {TICKTICK_TOKEN}",
+    "Content-Type": "application/json",
+}
+
+# ── Date helpers ─────────────────────────────────────────────────────────────
+
+def is_workday(d: date) -> bool:
+    return d.weekday() < 5 and d not in RU_HOLIDAYS
+
+
+def current_week(today: date) -> tuple[date, date]:
+    ws = today - timedelta(days=today.weekday())
+    return ws, ws + timedelta(days=4)
+
+
+def in_current_week(d: date, today: date) -> bool:
+    ws, we = current_week(today)
+    return ws <= d <= we
+
+# ── Notion ───────────────────────────────────────────────────────────────────
+
+def notion_get_all_active() -> list[dict]:
+    results, cursor = [], None
+    while True:
+        body: dict = {"page_size": 100}
+        if cursor:
+            body["start_cursor"] = cursor
+        r = httpx.post(
+            f"https://api.notion.com/v1/databases/{NOTION_DB}/query",
+            headers=NOTION_HDRS, json=body, timeout=30,
+        )
+        data = r.json()
+        results.extend(data.get("results", []))
+        if not data.get("has_more"):
+            break
+        cursor = data.get("next_cursor")
+    return results
+
+
+def parse_task(page: dict) -> dict | None:
+    props = page.get("properties", {})
+
+    title_arr = props.get("Задача", {}).get("title", [])
+    title = title_arr[0]["text"]["content"].strip() if title_arr else ""
+    if not title:
+        return None
+
+    status = (props.get("Статус", {}).get("select") or {}).get("name", "")
+    if status in ("Выполнено", "Отменено"):
+        return None
+
+    difficulty = (props.get("Сложность", {}).get("select") or {}).get("name", "")
+    duration = DURATION_MIN.get(difficulty, DEFAULT_DURATION)
+
+    date_prop = (props.get("Дедлайн", {}).get("date") or {})
+    deadline = None
+    raw = date_prop.get("start", "")
+    if raw:
+        try:
+            deadline = date.fromisoformat(raw[:10])
+        except ValueError:
+            pass
+
+    return {"id": page["id"], "title": title, "status": status, "deadline": deadline, "duration": duration}
+
+
+def notion_set_status(page_id: str, status: str) -> bool:
+    r = httpx.patch(
+        f"https://api.notion.com/v1/pages/{page_id}",
+        headers=NOTION_HDRS,
+        json={"properties": {"Статус": {"select": {"name": status}}}},
+        timeout=15,
+    )
+    return r.status_code == 200
+
+
+def notion_set_deadline(page_id: str, d: date) -> bool:
+    r = httpx.patch(
+        f"https://api.notion.com/v1/pages/{page_id}",
+        headers=NOTION_HDRS,
+        json={"properties": {"Дедлайн": {"date": {"start": d.isoformat()}}}},
+        timeout=15,
+    )
+    return r.status_code == 200
+
+# ── TickTick ─────────────────────────────────────────────────────────────────
+
+_tt_day_cache: dict[date, list[dict]] = {}
+
+
+def tt_day_tasks(d: date) -> list[dict]:
+    if d in _tt_day_cache:
+        return _tt_day_cache[d]
+    # Convert VL day boundaries to UTC for the API
+    s = datetime(d.year, d.month, d.day, 0, 0, tzinfo=VL).astimezone(UTC)
+    e = datetime(d.year, d.month, d.day, 23, 59, tzinfo=VL).astimezone(UTC)
+    try:
+        r = httpx.post(
+            "https://api.ticktick.com/open/v1/task/undone",
+            headers=TT_HDRS,
+            json={"startDate": s.isoformat(), "endDate": e.isoformat(), "timeZone": "Asia/Vladivostok"},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        items = data if isinstance(data, list) else data.get("items", data.get("data", []))
+        _tt_day_cache[d] = items
+        return items
+    except Exception as exc:
+        print(f"  TT fetch error {d}: {exc}")
+        return []
+
+
+def tt_parse_local_date(task: dict) -> date | None:
+    raw = task.get("startDate") or task.get("dueDate")
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(VL).date()
+    except Exception:
+        return None
+
+
+def tt_parse_times(task: dict) -> tuple[time, time] | None:
+    try:
+        s = datetime.fromisoformat(task["startDate"].replace("Z", "+00:00")).astimezone(VL).time()
+        e = datetime.fromisoformat(task["dueDate"].replace("Z", "+00:00")).astimezone(VL).time()
+        return s, e
+    except Exception:
+        return None
+
+
+def title_match(a: str, b: str) -> bool:
+    a, b = a.lower().strip(), b.lower().strip()
+    if a == b or a in b or b in a:
+        return True
+    aw, bw = set(a.split()), set(b.split())
+    return len(aw) >= 3 and len(aw & bw) / len(aw) >= 0.7
+
+
+def tt_find_on_day(notion_title: str, d: date) -> dict | None:
+    for t in tt_day_tasks(d):
+        if title_match(notion_title, t.get("title", "")):
+            return t
+    return None
+
+
+def find_free_slot(d: date, duration_min: int) -> tuple[time, time] | None:
+    """Find first free slot of duration_min on date d using cached day tasks."""
+    tasks = tt_day_tasks(d)
+
+    # Busy intervals in minutes from midnight (VL)
+    busy: list[tuple[int, int]] = []
+    for t in tasks:
+        times = tt_parse_times(t)
+        if times:
+            s_min = times[0].hour * 60 + times[0].minute
+            e_min = times[1].hour * 60 + times[1].minute
+            busy.append((s_min, e_min))
+    busy.sort()
+
+    def to_time(m: int) -> time:
+        return time(m // 60, m % 60)
+
+    for block_start, block_end in WORK_BLOCKS:
+        cursor = block_start
+        for bs, be in busy:
+            if be <= block_start or bs >= block_end:
+                continue  # outside this block
+            if bs - cursor >= duration_min + BUFFER_MIN:
+                return to_time(cursor), to_time(cursor + duration_min)
+            cursor = max(cursor, be + BUFFER_MIN)
+        if block_end - cursor >= duration_min:
+            return to_time(cursor), to_time(cursor + duration_min)
+
+    return None
+
+
+def tt_create_task(title: str, d: date, start: time, end: time) -> bool:
+    s_dt = datetime(d.year, d.month, d.day, start.hour, start.minute, tzinfo=VL)
+    e_dt = datetime(d.year, d.month, d.day, end.hour, end.minute, tzinfo=VL)
+    try:
+        r = httpx.post(
+            "https://api.ticktick.com/open/v1/task",
+            headers=TT_HDRS,
+            json={
+                "title": title,
+                "startDate": s_dt.isoformat(),
+                "dueDate": e_dt.isoformat(),
+                "timeZone": "Asia/Vladivostok",
+                "isAllDay": False,
+            },
+            timeout=15,
+        )
+        return r.status_code in (200, 201)
+    except Exception as exc:
+        print(f"  TT create error: {exc}")
+        return False
+
+# ── Telegram ─────────────────────────────────────────────────────────────────
+
+def telegram_notify(text: str) -> None:
+    try:
+        httpx.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"},
+            timeout=15,
+        )
+    except Exception as exc:
+        print(f"  Telegram error: {exc}")
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    now_vl = datetime.now(VL)
+    today = now_vl.date()
+    ws, we = current_week(today)
+
+    print(f"=== notion_ticktick_sync {now_vl.strftime('%Y-%m-%d %H:%M')} VL | week {ws}–{we} ===")
+
+    pages = notion_get_all_active()
+    tasks = [parse_task(p) for p in pages]
+    tasks = [t for t in tasks if t]
+    print(f"Active tasks: {len(tasks)}")
+
+    for task in tasks:
+        title = task["title"]
+        deadline: date | None = task["deadline"]
+        status = task["status"]
+        duration = task["duration"]
+        page_id = task["id"]
+        short = title[:45]
+
+        if not deadline:
+            continue
+
+        if not in_current_week(deadline, today):
+            # Outside current week → demote if needed
+            if status == "Спринт неделя":
+                if notion_set_status(page_id, "Бэклог"):
+                    print(f"  ↓ Бэклог (out of week): {short}")
+            continue
+
+        # In current week — look for TickTick task
+        tt = tt_find_on_day(title, deadline)
+
+        if tt:
+            # Sync date TickTick → Notion if shifted
+            tt_date = tt_parse_local_date(tt)
+            if tt_date and tt_date != deadline:
+                new_in_week = in_current_week(tt_date, today)
+                notion_set_deadline(page_id, tt_date)
+                target = "Спринт неделя" if new_in_week else "Бэклог"
+                notion_set_status(page_id, target)
+                arrow = "↑" if target == "Спринт неделя" else "↓"
+                print(f"  📅→Notion {deadline}→{tt_date} {arrow}{target}: {short}")
+                deadline = tt_date
+            elif status != "Спринт неделя":
+                notion_set_status(page_id, "Спринт неделя")
+                print(f"  ↑ Спринт неделя (exists in TT): {short}")
+        else:
+            # Not in TickTick — find slot and create
+            slot = find_free_slot(deadline, duration)
+            if slot:
+                s_t, e_t = slot
+                ok = tt_create_task(title, deadline, s_t, e_t)
+                if ok:
+                    _tt_day_cache.pop(deadline, None)  # invalidate cache
+                    if status != "Спринт неделя":
+                        notion_set_status(page_id, "Спринт неделя")
+                    print(f"  ➕ TT created {deadline} {s_t.strftime('%H:%M')}–{e_t.strftime('%H:%M')}: {short}")
+                else:
+                    print(f"  ❌ TT create failed: {short}")
+            else:
+                telegram_notify(
+                    f"⚠️ <b>Конфликт расписания</b>\n"
+                    f"«{title}» запланирована на {deadline.strftime('%d.%m')} ({duration} мин), "
+                    f"но свободного слота нет.\n"
+                    f"Скорректируй вручную."
+                )
+                print(f"  ⚠️ No free slot: {short} ({deadline})")
+
+    print("=== Done ===")
+
+
+if __name__ == "__main__":
+    main()
