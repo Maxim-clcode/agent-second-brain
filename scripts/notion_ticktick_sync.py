@@ -318,7 +318,17 @@ def main() -> None:
                     print(f"  ↓ Бэклог (out of week): {short}")
             continue
 
-        # In current week — look for TickTick task
+        # Tasks with deadline today but workday already over → only sync status, skip TT ops
+        day_is_over = (deadline == today and now_vl.hour >= 18)
+        # Tasks with deadline in the past → skip TT ops entirely
+        day_is_past = deadline < today
+
+        if day_is_past or day_is_over:
+            if status != "Спринт неделя":
+                notion_set_status(page_id, "Спринт неделя")
+            continue
+
+        # In current week, future/today → look for TickTick task
         tt = tt_find_on_day(title, deadline)
 
         if tt:
@@ -338,7 +348,6 @@ def main() -> None:
         else:
             # Not found in TickTick — only create if API is reliable
             if not tt_api_sanity_check(today):
-                # API returning empty — don't create, just ensure correct status
                 if status != "Спринт неделя":
                     notion_set_status(page_id, "Спринт неделя")
                     print(f"  ↑ Спринт неделя (TT API unreliable, no create): {short}")
@@ -356,12 +365,14 @@ def main() -> None:
                 else:
                     print(f"  ❌ TT create failed: {short}")
             else:
-                telegram_notify(
-                    f"⚠️ <b>Конфликт расписания</b>\n"
-                    f"«{title}» запланирована на {deadline.strftime('%d.%m')} ({duration} мин), "
-                    f"но свободного слота нет.\n"
-                    f"Скорректируй вручную."
-                )
+                # Only notify for future dates — no point alarming about today if it's too late
+                if deadline > today:
+                    telegram_notify(
+                        f"⚠️ <b>Конфликт расписания</b>\n"
+                        f"«{title}» запланирована на {deadline.strftime('%d.%m')} ({duration} мин), "
+                        f"но свободного слота нет.\n"
+                        f"Скорректируй вручную."
+                    )
                 print(f"  ⚠️ No free slot: {short} ({deadline})")
 
     print("=== Done ===")
