@@ -318,17 +318,12 @@ def main() -> None:
                     print(f"  ↓ Бэклог (out of week): {short}")
             continue
 
-        # Tasks with deadline today but workday already over → only sync status, skip TT ops
-        day_is_over = (deadline == today and now_vl.hour >= 18)
-        # Tasks with deadline in the past → skip TT ops entirely
-        day_is_past = deadline < today
+        # Tasks with deadline today or earlier → skip TickTick creation entirely.
+        # Same-day tasks were already added when scheduled; if user closed/deleted
+        # them in TT we must NOT recreate — we can't tell "never existed" from "was closed".
+        skip_tt_create = deadline <= today
 
-        if day_is_past or day_is_over:
-            if status != "Спринт неделя":
-                notion_set_status(page_id, "Спринт неделя")
-            continue
-
-        # In current week, future/today → look for TickTick task
+        # In current week → look for TickTick task
         tt = tt_find_on_day(title, deadline)
 
         if tt:
@@ -346,6 +341,14 @@ def main() -> None:
                 notion_set_status(page_id, "Спринт неделя")
                 print(f"  ↑ Спринт неделя (exists in TT): {short}")
         else:
+            # Not found in TickTick.
+            # For today/past: don't recreate — user may have closed/deleted it.
+            if skip_tt_create:
+                if status != "Спринт неделя":
+                    notion_set_status(page_id, "Спринт неделя")
+                    print(f"  ↑ Спринт неделя (today, no TT recreate): {short}")
+                continue
+
             # Not found in TickTick — only create if API is reliable
             if not tt_api_sanity_check(today):
                 if status != "Спринт неделя":
