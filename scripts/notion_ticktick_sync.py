@@ -2,10 +2,12 @@
 """TickTick ↔ Notion continuous sync — runs every 10 min via dbrain-sync.timer.
 
 For each active Notion PM Backlog task with a "Дедлайн":
-  - In current Mon–Fri week + task exists in TickTick  → date-sync TT→Notion, status = Спринт неделя
-  - In current Mon–Fri week + task missing from TickTick → find free slot, create in TT, status = Спринт неделя
-  - In current Mon–Fri week + no free slot              → Telegram conflict warning
   - Outside current week                                → status = Бэклог
+  - In current Mon–Fri week + task exists in TickTick  → date-sync TT→Notion, status = Спринт неделя
+  - In current Mon–Fri week + task missing from TickTick:
+      Only if TickTick API sanity check passes (returns ≥1 task on today) →
+        find free slot, create in TT, status = Спринт неделя
+      If sanity check fails (API unreliable) → skip creation, only set status
 
 Duration: Простая = 30 min, Средняя = 60 min (default).
 """
@@ -130,12 +132,10 @@ def notion_set_deadline(page_id: str, d: date) -> bool:
 # ── TickTick ─────────────────────────────────────────────────────────────────
 
 _tt_day_cache: dict[date, list[dict]] = {}
+_tt_api_reliable: bool | None = None  # None = not checked yet
 
 
-def tt_day_tasks(d: date) -> list[dict]:
-    if d in _tt_day_cache:
-        return _tt_day_cache[d]
-    # Convert VL day boundaries to UTC for the API
+def _tt_fetch_day(d: date) -> list[dict]:
     s = datetime(d.year, d.month, d.day, 0, 0, tzinfo=VL).astimezone(UTC)
     e = datetime(d.year, d.month, d.day, 23, 59, tzinfo=VL).astimezone(UTC)
     try:
@@ -148,12 +148,44 @@ def tt_day_tasks(d: date) -> list[dict]:
         if r.status_code != 200:
             return []
         data = r.json()
-        items = data if isinstance(data, list) else data.get("items", data.get("data", []))
-        _tt_day_cache[d] = items
-        return items
+        return data if isinstance(data, list) else data.get("items", data.get("data", []))
     except Exception as exc:
         print(f"  TT fetch error {d}: {exc}")
         return []
+
+
+def tt_api_sanity_check(today: date) -> bool:
+    """Return True only if TickTick API is returning real data.
+
+    Checks the past 7 workdays: if at least one day returned ≥1 task,
+    the API is working. If every day returns 0, assume the endpoint is
+    broken and skip all task-creation logic.
+    """
+    global _tt_api_reliable
+    if _tt_api_reliable is not None:
+        return _tt_api_reliable
+
+    d = today
+    for _ in range(10):
+        if is_workday(d):
+            tasks = _tt_fetch_day(d)
+            if tasks:
+                print(f"  TT API OK: {len(tasks)} tasks on {d}")
+                _tt_api_reliable = True
+                return True
+        d -= timedelta(days=1)
+
+    print("  ⚠️  TT API unreliable — returned 0 tasks across last 10 days. Skipping task creation.")
+    _tt_api_reliable = False
+    return False
+
+
+def tt_day_tasks(d: date) -> list[dict]:
+    if d in _tt_day_cache:
+        return _tt_day_cache[d]
+    items = _tt_fetch_day(d)
+    _tt_day_cache[d] = items
+    return items
 
 
 def tt_parse_local_date(task: dict) -> date | None:
@@ -304,7 +336,14 @@ def main() -> None:
                 notion_set_status(page_id, "Спринт неделя")
                 print(f"  ↑ Спринт неделя (exists in TT): {short}")
         else:
-            # Not in TickTick — find slot and create
+            # Not found in TickTick — only create if API is reliable
+            if not tt_api_sanity_check(today):
+                # API returning empty — don't create, just ensure correct status
+                if status != "Спринт неделя":
+                    notion_set_status(page_id, "Спринт неделя")
+                    print(f"  ↑ Спринт неделя (TT API unreliable, no create): {short}")
+                continue
+
             slot = find_free_slot(deadline, duration)
             if slot:
                 s_t, e_t = slot
