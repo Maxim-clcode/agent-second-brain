@@ -14,12 +14,30 @@ Duration: Простая = 30 min, Средняя = 60 min (default).
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import holidays
 import httpx
+
+NOTIFY_STATE_FILE = Path(__file__).parent.parent / "data" / "tt_notify_state.json"
+
+
+def load_notified(today: date) -> set[str]:
+    """Load set of page_ids already notified today (cleared on new day)."""
+    if NOTIFY_STATE_FILE.exists():
+        raw = json.loads(NOTIFY_STATE_FILE.read_text())
+        if raw.get("date") == today.isoformat():
+            return set(raw.get("ids", []))
+    return set()
+
+
+def save_notified(today: date, notified: set[str]) -> None:
+    NOTIFY_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    NOTIFY_STATE_FILE.write_text(json.dumps({"date": today.isoformat(), "ids": sorted(notified)}))
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
@@ -292,6 +310,7 @@ def main() -> None:
     now_vl = datetime.now(VL)
     today = now_vl.date()
     ws, we = current_week(today)
+    notified_today = load_notified(today)
 
     print(f"=== notion_ticktick_sync {now_vl.strftime('%Y-%m-%d %H:%M')} VL | week {ws}–{we} ===")
 
@@ -318,11 +337,6 @@ def main() -> None:
                     print(f"  ↓ Бэклог (out of week): {short}")
             continue
 
-        # Tasks with deadline today or earlier → skip TickTick creation entirely.
-        # Same-day tasks were already added when scheduled; if user closed/deleted
-        # them in TT we must NOT recreate — we can't tell "never existed" from "was closed".
-        skip_tt_create = deadline <= today
-
         # In current week → look for TickTick task
         tt = tt_find_on_day(title, deadline)
 
@@ -342,14 +356,28 @@ def main() -> None:
                 print(f"  ↑ Спринт неделя (exists in TT): {short}")
         else:
             # Not found in TickTick.
-            # For today/past: don't recreate — user may have closed/deleted it.
-            if skip_tt_create:
+            if deadline < today:
+                # Past days: skip silently, just keep status correct
                 if status != "Спринт неделя":
                     notion_set_status(page_id, "Спринт неделя")
-                    print(f"  ↑ Спринт неделя (today, no TT recreate): {short}")
                 continue
 
-            # Not found in TickTick — only create if API is reliable
+            if deadline == today:
+                # Today: can't tell "never added" from "was closed by user".
+                # Notify once, let user decide manually.
+                if status != "Спринт неделя":
+                    notion_set_status(page_id, "Спринт неделя")
+                if page_id not in notified_today:
+                    telegram_notify(
+                        f"📋 <b>Задача не в TickTick</b>\n"
+                        f"«{title}» есть в Notion на сегодня, но не найдена в TickTick.\n"
+                        f"Добавь вручную если нужно."
+                    )
+                    notified_today.add(page_id)
+                    print(f"  📲 Уведомление отправлено (today, not in TT): {short}")
+                continue
+
+            # Future date: auto-create if API is reliable
             if not tt_api_sanity_check(today):
                 if status != "Спринт неделя":
                     notion_set_status(page_id, "Спринт неделя")
@@ -368,16 +396,15 @@ def main() -> None:
                 else:
                     print(f"  ❌ TT create failed: {short}")
             else:
-                # Only notify for future dates — no point alarming about today if it's too late
-                if deadline > today:
-                    telegram_notify(
-                        f"⚠️ <b>Конфликт расписания</b>\n"
-                        f"«{title}» запланирована на {deadline.strftime('%d.%m')} ({duration} мин), "
-                        f"но свободного слота нет.\n"
-                        f"Скорректируй вручную."
-                    )
+                telegram_notify(
+                    f"⚠️ <b>Конфликт расписания</b>\n"
+                    f"«{title}» запланирована на {deadline.strftime('%d.%m')} ({duration} мин), "
+                    f"но свободного слота нет.\n"
+                    f"Скорректируй вручную."
+                )
                 print(f"  ⚠️ No free slot: {short} ({deadline})")
 
+    save_notified(today, notified_today)
     print("=== Done ===")
 
 
