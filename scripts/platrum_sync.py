@@ -44,41 +44,48 @@ VL_TZ = ZoneInfo("Asia/Vladivostok")
 STATE_FILE = Path(__file__).parent.parent / "data" / "platrum_seen.json"
 
 
-def load_state() -> tuple[set, dict, set]:
-    """Return (seen_ids, partial_ids, seen_auditor_ids).
-    seen          = tasks where Maxim is responsible — both TT+Notion confirmed
-    partial       = {task_id: {"tt_done": bool, "attempts": int}}
-    seen_auditor  = tasks where Maxim is auditor — Notion confirmed
+def load_state() -> tuple[set, dict, set, dict]:
+    """Return (seen, partial, seen_auditor, notion_map).
+    seen         = platrum IDs where Maxim is responsible — TT+Notion done
+    partial      = {platrum_id: {"tt_done": bool, "attempts": int}}
+    seen_auditor = platrum IDs where Maxim is auditor — Notion done
+    notion_map   = {platrum_id: notion_page_id} — for completion tracking
     """
     if STATE_FILE.exists():
         raw = json.loads(STATE_FILE.read_text())
         if isinstance(raw, list):
-            return set(raw), {}, set()
+            return set(raw), {}, set(), {}
         return (
             set(raw.get("seen", [])),
             raw.get("partial", {}),
             set(raw.get("seen_auditor", [])),
+            raw.get("notion_map", {}),
         )
-    return set(), {}, set()
+    return set(), {}, set(), {}
 
 
-def save_state(seen: set, partial: dict, seen_auditor: set) -> None:
+def save_state(seen: set, partial: dict, seen_auditor: set, notion_map: dict) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(
-        {"seen": sorted(seen), "partial": partial, "seen_auditor": sorted(seen_auditor)},
+        {
+            "seen": sorted(seen),
+            "partial": partial,
+            "seen_auditor": sorted(seen_auditor),
+            "notion_map": notion_map,
+        },
         indent=2,
     ))
 
 
 # Legacy helpers kept for callers
 def load_seen() -> set:
-    seen, _, _ = load_state()
+    seen, _, _, _ = load_state()
     return seen
 
 
 def save_seen(seen: set) -> None:
-    _, partial, seen_auditor = load_state()
-    save_state(seen, partial, seen_auditor)
+    _, partial, seen_auditor, notion_map = load_state()
+    save_state(seen, partial, seen_auditor, notion_map)
 
 
 def _with_retry(fn, *args, retries: int = 3, delay: float = 5.0, **kwargs) -> bool:
@@ -164,14 +171,15 @@ def add_ticktick(name: str, description: str, start_iso: str | None, finish_iso:
     return r.status_code == 200
 
 
-def add_notion(
+def create_notion_page(
     name: str,
     description: str,
     deadline_date: str | None,
     is_important: bool,
     status: str = "Бэклог",
     responsible: str | None = None,
-) -> bool:
+) -> str | None:
+    """Create a Notion page and return its page_id, or None on failure."""
     priority = "P1" if is_important else "P2"
     props: dict = {
         "Задача": {"title": [{"text": {"content": name}}]},
@@ -194,6 +202,34 @@ def add_notion(
         json={"parent": {"database_id": NOTION_PM_BACKLOG}, "properties": props},
         timeout=30,
     )
+    if r.status_code == 200:
+        return r.json().get("id")
+    return None
+
+
+def add_notion(
+    name: str,
+    description: str,
+    deadline_date: str | None,
+    is_important: bool,
+    status: str = "Бэклог",
+    responsible: str | None = None,
+) -> bool:
+    return create_notion_page(name, description, deadline_date, is_important, status, responsible) is not None
+
+
+def notion_set_done(page_id: str) -> bool:
+    """Move a Notion page to Выполнено."""
+    r = requests.patch(
+        f"https://api.notion.com/v1/pages/{page_id}",
+        headers={
+            "Authorization": f"Bearer {NOTION_TOKEN}",
+            "Notion-Version": "2022-06-28",
+            "Content-Type": "application/json",
+        },
+        json={"properties": {"Статус": {"select": {"name": "Выполнено"}}}},
+        timeout=15,
+    )
     return r.status_code == 200
 
 
@@ -207,18 +243,53 @@ def notify(text: str) -> None:
     )
 
 
+def _create_notion_with_retry(retries: int = 3, delay: float = 5.0, **kwargs) -> str | None:
+    for attempt in range(retries):
+        try:
+            page_id = create_notion_page(**kwargs)
+            if page_id:
+                return page_id
+        except Exception as exc:
+            print(f"  attempt {attempt + 1} error: {exc}")
+        if attempt < retries - 1:
+            time.sleep(delay)
+    return None
+
+
 def main():
-    seen, partial, seen_auditor = load_state()
+    seen, partial, seen_auditor, notion_map = load_state()
     tasks = platrum_tasks()
+    auditor_tasks = platrum_auditor_tasks()
 
     # First run: mark all existing as seen to avoid flooding
     if not seen and not partial:
         seen = {str(t["id"]) for t in tasks}
-        auditor_tasks = platrum_auditor_tasks()
         seen_auditor = {str(t["id"]) for t in auditor_tasks}
-        save_state(seen, {}, seen_auditor)
+        save_state(seen, {}, seen_auditor, {})
         print(f"First run: {len(seen)} responsible + {len(seen_auditor)} auditor tasks marked as seen.")
         return
+
+    # Build combined map of all current Platrum tasks (incl. finished)
+    all_task_map = {str(t["id"]): t for t in tasks + auditor_tasks}
+
+    # --- Check completion: tasks we're tracking that became finished ---
+    done_count = 0
+    for platrum_id, notion_page_id in list(notion_map.items()):
+        task = all_task_map.get(platrum_id)
+        is_done = task is not None and (
+            task.get("is_finished") or task.get("deletion_date") is not None
+        )
+        if is_done:
+            if notion_set_done(notion_page_id):
+                name = task["name"] if task else platrum_id
+                print(f"  ✅ Выполнено в Notion [{platrum_id}]: {name[:60]}")
+                del notion_map[platrum_id]
+                # Also remove from seen sets so we don't track it further
+                seen.discard(platrum_id)
+                seen_auditor.discard(platrum_id)
+                done_count += 1
+            else:
+                print(f"  ❌ Не удалось обновить Выполнено [{platrum_id}]")
 
     # --- Retry partial (TickTick succeeded before, Notion failed) ---
     task_map = {str(t["id"]): t for t in tasks}
@@ -226,7 +297,6 @@ def main():
     for task_id, info in list(partial.items()):
         task = task_map.get(task_id)
         if not task:
-            # Task no longer in Platrum (deleted/finished) — drop
             del partial[task_id]
             continue
 
@@ -238,9 +308,12 @@ def main():
         deadline_date = finish_local.date().isoformat()
 
         attempts = info.get("attempts", 0) + 1
-        nt_ok = _with_retry(add_notion, name, description, deadline_date, is_important)
-        if nt_ok:
+        page_id = _create_notion_with_retry(
+            name=name, description=description, deadline_date=deadline_date, is_important=is_important,
+        )
+        if page_id:
             seen.add(task_id)
+            notion_map[task_id] = page_id
             del partial[task_id]
             print(f"Retried Notion OK [{task_id}]: {name}")
             notify(f"✅ <b>Notion синхронизирован (retry #{attempts})</b>\n📌 {name}")
@@ -253,7 +326,7 @@ def main():
             print(f"Retry Notion FAIL [{task_id}] attempt {attempts}: {name}")
         retried.append(task_id)
 
-    # --- Process truly new tasks ---
+    # --- Process truly new responsible tasks ---
     new_tasks = [
         t for t in tasks
         if str(t["id"]) not in seen
@@ -280,22 +353,23 @@ def main():
         start_iso = task["start_date"].replace("Z", "+00:00") if task.get("start_date") else None
 
         tt_ok = _with_retry(add_ticktick, name, description, start_iso, finish_iso, is_important)
-        nt_ok = _with_retry(add_notion, name, description, deadline_date, is_important)
+        page_id = _create_notion_with_retry(
+            name=name, description=description, deadline_date=deadline_date, is_important=is_important,
+        )
+        nt_ok = page_id is not None
 
         if tt_ok and nt_ok:
             seen.add(task_id)
+            notion_map[task_id] = page_id
         elif tt_ok and not nt_ok:
-            # TickTick done, Notion failed — retry Notion next run
             partial[task_id] = {"tt_done": True, "attempts": 1}
-            seen.add(task_id)  # prevent re-adding to TickTick
+            seen.add(task_id)
         else:
-            # TickTick failed — retry everything next run (don't add to seen)
             print(f"  TickTick failed for [{task_id}] — will retry next run")
 
         tt_icon = "✅" if tt_ok else "❌"
         nt_icon = "✅" if nt_ok else "❌"
         priority_icon = "🔴" if is_important else "🟠"
-
         notify(
             f"{priority_icon} <b>Новая задача из Platrum</b>\n"
             f"📌 {name}\n"
@@ -305,8 +379,7 @@ def main():
         )
         print(f"Synced [{task_id}]: {name} tt={tt_ok} nt={nt_ok}")
 
-    # --- Auditor tasks: Maxim is auditor but not responsible ---
-    auditor_tasks = platrum_auditor_tasks()
+    # --- New auditor tasks ---
     new_auditor = [
         t for t in auditor_tasks
         if str(t["id"]) not in seen_auditor
@@ -330,14 +403,14 @@ def main():
             deadline_date = finish_local.date().isoformat()
             deadline_str = finish_local.strftime("%d.%m.%Y")
 
-        nt_ok = _with_retry(
-            add_notion, name, description, deadline_date, is_important,
-            status="Выполняют сотрудники",
-            responsible=responsible,
+        page_id = _create_notion_with_retry(
+            name=name, description=description, deadline_date=deadline_date,
+            is_important=is_important, status="Выполняют сотрудники", responsible=responsible,
         )
 
-        if nt_ok:
+        if page_id:
             seen_auditor.add(task_id)
+            notion_map[task_id] = page_id
             resp_label = responsible or "неизвестный"
             priority_icon = "🔴" if is_important else "🟠"
             notify(
@@ -350,8 +423,8 @@ def main():
         else:
             print(f"  Notion failed for auditor task [{task_id}]: {name}")
 
-    save_state(seen, partial, seen_auditor)
-    print(f"Done. {len(new_tasks)} new task(s), {len(retried)} retried, {len(new_auditor)} auditor task(s).")
+    save_state(seen, partial, seen_auditor, notion_map)
+    print(f"Done. {len(new_tasks)} new, {len(retried)} retried, {len(new_auditor)} auditor, {done_count} completed.")
 
 
 if __name__ == "__main__":
