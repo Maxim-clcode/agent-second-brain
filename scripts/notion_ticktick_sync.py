@@ -26,18 +26,26 @@ import httpx
 NOTIFY_STATE_FILE = Path(__file__).parent.parent / "data" / "tt_notify_state.json"
 
 
-def load_notified(today: date) -> set[str]:
-    """Load set of page_ids already notified today (cleared on new day)."""
+def load_notify_state(today: date) -> tuple[set[str], set[str]]:
+    """Return (notified_today, muted_pages).
+    notified_today — page_ids already notified today (auto-cleared on new day).
+    muted_pages    — page_ids to never notify about (persistent).
+    """
     if NOTIFY_STATE_FILE.exists():
         raw = json.loads(NOTIFY_STATE_FILE.read_text())
-        if raw.get("date") == today.isoformat():
-            return set(raw.get("ids", []))
-    return set()
+        notified = set(raw.get("ids", [])) if raw.get("date") == today.isoformat() else set()
+        muted = set(raw.get("muted", []))
+        return notified, muted
+    return set(), set()
 
 
-def save_notified(today: date, notified: set[str]) -> None:
+def save_notify_state(today: date, notified: set[str], muted: set[str]) -> None:
     NOTIFY_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    NOTIFY_STATE_FILE.write_text(json.dumps({"date": today.isoformat(), "ids": sorted(notified)}))
+    NOTIFY_STATE_FILE.write_text(json.dumps({
+        "date": today.isoformat(),
+        "ids": sorted(notified),
+        "muted": sorted(muted),
+    }))
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
@@ -310,7 +318,7 @@ def main() -> None:
     now_vl = datetime.now(VL)
     today = now_vl.date()
     ws, we = current_week(today)
-    notified_today = load_notified(today)
+    notified_today, muted_pages = load_notify_state(today)
 
     print(f"=== notion_ticktick_sync {now_vl.strftime('%Y-%m-%d %H:%M')} VL | week {ws}–{we} ===")
 
@@ -364,10 +372,10 @@ def main() -> None:
 
             if deadline == today:
                 # Today: can't tell "never added" from "was closed by user".
-                # Notify once, let user decide manually.
+                # Notify once per day, let user decide manually.
                 if status != "Спринт неделя":
                     notion_set_status(page_id, "Спринт неделя")
-                if page_id not in notified_today:
+                if page_id not in notified_today and page_id not in muted_pages:
                     telegram_notify(
                         f"📋 <b>Задача не в TickTick</b>\n"
                         f"«{title}» есть в Notion на сегодня, но не найдена в TickTick.\n"
@@ -396,15 +404,17 @@ def main() -> None:
                 else:
                     print(f"  ❌ TT create failed: {short}")
             else:
-                telegram_notify(
-                    f"⚠️ <b>Конфликт расписания</b>\n"
-                    f"«{title}» запланирована на {deadline.strftime('%d.%m')} ({duration} мин), "
-                    f"но свободного слота нет.\n"
-                    f"Скорректируй вручную."
-                )
+                if page_id not in notified_today and page_id not in muted_pages:
+                    telegram_notify(
+                        f"⚠️ <b>Конфликт расписания</b>\n"
+                        f"«{title}» запланирована на {deadline.strftime('%d.%m')} ({duration} мин), "
+                        f"но свободного слота нет.\n"
+                        f"Скорректируй вручную."
+                    )
+                    notified_today.add(page_id)
                 print(f"  ⚠️ No free slot: {short} ({deadline})")
 
-    save_notified(today, notified_today)
+    save_notify_state(today, notified_today, muted_pages)
     print("=== Done ===")
 
 
