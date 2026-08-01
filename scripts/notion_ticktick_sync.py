@@ -49,10 +49,10 @@ def save_notify_state(today: date, notified: set[str], muted: set[str]) -> None:
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
-NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "NOTION_TOKEN_REDACTED")
+NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 NOTION_DB = "22876284-e92f-4866-a908-3a3bda425637"
-TICKTICK_TOKEN = os.environ.get("TICKTICK_TOKEN", "tp_370240d2191b485496c72cc7c5522326")
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8945688412:AAFf5U8JtSScWVT_ex7u2T5M9Zvwj2dKZ8Y")
+TICKTICK_TOKEN = os.environ["TICKTICK_TOKEN"]
+TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "257352741")
 
 VL = ZoneInfo("Asia/Vladivostok")

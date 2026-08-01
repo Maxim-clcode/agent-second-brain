@@ -8,6 +8,7 @@ Two complementary checks:
 """
 
 import json
+import os
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -15,9 +16,9 @@ from zoneinfo import ZoneInfo
 import holidays
 import httpx
 
-NOTION_TOKEN = "NOTION_TOKEN_REDACTED"
+NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 NOTION_PM_BACKLOG = "22876284-e92f-4866-a908-3a3bda425637"
-TICKTICK_TOKEN = "tp_370240d2191b485496c72cc7c5522326"
+TICKTICK_TOKEN = os.environ["TICKTICK_TOKEN"]
 ROADMAPS_DIR = Path(__file__).parent.parent / "data" / "roadmaps"
 VL_TZ = ZoneInfo("Asia/Vladivostok")
 RU_HOLIDAYS = holidays.Russia()

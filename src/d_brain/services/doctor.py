@@ -64,9 +64,12 @@ class Doctor:
         if res.status == "logged_out":
             return CheckResult("canary", False, "Claude разлогинился — нужен вход")
         if res.status == "rate_limited":
-            return CheckResult("canary", False, "лимит подписки исчерпан")
+            return CheckResult("canary", False, "Claude временно перегружен (rate limit)")
         if res.ok and self._canary_token in (res.reply or ""):
             return CheckResult("canary", True, "сессия отвечает")
+        # Session busy (pane lock held by bot) — not a real failure
+        if res.status == "error" and "pane lock" in (res.detail or ""):
+            return CheckResult("canary", True, "сессия занята запросом — проверка пропущена")
         return CheckResult("canary", False, res.detail or res.status)
 
     def run(self) -> DoctorReport:

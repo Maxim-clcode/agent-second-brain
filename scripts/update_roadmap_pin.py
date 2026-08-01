@@ -17,7 +17,7 @@ import httpx as requests
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-NOTION_TOKEN = "NOTION_TOKEN_REDACTED"
+NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 NOTION_PM_BACKLOG = "22876284-e92f-4866-a908-3a3bda425637"
 ROADMAPS_DIR = Path(__file__).parent.parent / "data" / "roadmaps"
 VL_TZ = ZoneInfo("Asia/Vladivostok")

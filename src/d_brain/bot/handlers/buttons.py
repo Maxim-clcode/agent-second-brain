@@ -1,6 +1,8 @@
 """Button handlers for reply keyboard."""
 
-from datetime import datetime, timedelta
+import os
+from datetime import datetime, timedelta, timezone as dt_timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 from aiogram import Bot, F, Router
@@ -9,67 +11,100 @@ from aiogram.types import CallbackQuery, Message
 from d_brain.bot.keyboards import get_plan_day_keyboard
 from d_brain.services.workday import next_workday
 
-_NOTION_TOKEN = "NOTION_TOKEN_REDACTED"
+_NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 _PM_BACKLOG_DB = "22876284-e92f-4866-a908-3a3bda425637"
+_TT_TOKEN = os.environ["TICKTICK_TOKEN"]
+_VL_TZ = ZoneInfo("Asia/Vladivostok")
 
 
-def _count_notion_backlog() -> int | None:
+async def _count_notion_backlog() -> int | None:
     """Hard Notion API call — returns exact count of non-done tasks in PM Backlog.
     Returns None on error so the prompt still works without the count.
     """
+    _filter = {
+        "and": [
+            {"property": "Статус", "select": {"does_not_equal": "Выполнено"}},
+            {"property": "Статус", "select": {"does_not_equal": "Отменено"}},
+        ]
+    }
+    _headers = {
+        "Authorization": f"Bearer {_NOTION_TOKEN}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(
+                f"https://api.notion.com/v1/databases/{_PM_BACKLOG_DB}/query",
+                headers=_headers,
+                json={"filter": _filter, "page_size": 100},
+            )
+            if r.status_code != 200:
+                print(f"[count_backlog] Notion API error: {r.status_code} {r.text[:200]}")
+                return None
+            data = r.json()
+            count = len(data.get("results", []))
+            cursor = data.get("next_cursor")
+            while cursor:
+                r2 = await client.post(
+                    f"https://api.notion.com/v1/databases/{_PM_BACKLOG_DB}/query",
+                    headers=_headers,
+                    json={"filter": _filter, "page_size": 100, "start_cursor": cursor},
+                )
+                if r2.status_code != 200:
+                    break
+                d2 = r2.json()
+                count += len(d2.get("results", []))
+                cursor = d2.get("next_cursor")
+            print(f"[count_backlog] result={count} (has_more={cursor is not None})")
+            return count
+    except Exception as exc:
+        print(f"[count_backlog] Exception: {exc}")
+        return None
+
+def _fetch_ticktick_occupied(date_iso: str) -> str:
+    """Pre-fetch TickTick tasks for date, convert UTC→VL, return sorted formatted list.
+
+    Returns empty string on any error so the prompt falls back to asking Claude.
+    """
+    day = datetime.fromisoformat(date_iso)
+    start_vl = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=_VL_TZ)
+    end_vl = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=_VL_TZ)
+    start_utc = start_vl.astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    end_utc = end_vl.astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.999Z")
     try:
         r = httpx.post(
-            f"https://api.notion.com/v1/databases/{_PM_BACKLOG_DB}/query",
-            headers={
-                "Authorization": f"Bearer {_NOTION_TOKEN}",
-                "Notion-Version": "2022-06-28",
-                "Content-Type": "application/json",
-            },
-            json={
-                "filter": {
-                    "and": [
-                        {"property": "Статус", "select": {"does_not_equal": "Выполнено"}},
-                        {"property": "Статус", "select": {"does_not_equal": "Отменено"}},
-                    ]
-                },
-                "page_size": 1,  # we only need total count via has_more + pagination
-            },
-            timeout=10,
+            "https://api.ticktick.com/open/v1/task/undone",
+            headers={"Authorization": f"Bearer {_TT_TOKEN}", "Content-Type": "application/json"},
+            json={"projectIds": [], "taskIds": [], "startDate": start_utc, "endDate": end_utc},
+            timeout=15,
         )
         if r.status_code != 200:
-            return None
-        data = r.json()
-        # Count all pages via pagination
-        count = len(data.get("results", []))
-        cursor = data.get("next_cursor")
-        while cursor:
-            r2 = httpx.post(
-                f"https://api.notion.com/v1/databases/{_PM_BACKLOG_DB}/query",
-                headers={
-                    "Authorization": f"Bearer {_NOTION_TOKEN}",
-                    "Notion-Version": "2022-06-28",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "filter": {
-                        "and": [
-                            {"property": "Статус", "select": {"does_not_equal": "Выполнено"}},
-                            {"property": "Статус", "select": {"does_not_equal": "Отменено"}},
-                        ]
-                    },
-                    "page_size": 100,
-                    "start_cursor": cursor,
-                },
-                timeout=10,
-            )
-            if r2.status_code != 200:
-                break
-            d2 = r2.json()
-            count += len(d2.get("results", []))
-            cursor = d2.get("next_cursor")
-        return count
+            return ""
+        tasks = r.json()
+        if not isinstance(tasks, list):
+            return ""
+        slots = []
+        for t in tasks:
+            if t.get("isAllDay"):
+                continue
+            start_str = t.get("startDate", "")
+            end_str = t.get("dueDate", "")
+            if not start_str:
+                continue
+            try:
+                start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00")).astimezone(_VL_TZ)
+                end_dt = datetime.fromisoformat(end_str.replace("Z", "+00:00")).astimezone(_VL_TZ) if end_str else None
+                start_t = start_dt.strftime("%H:%M")
+                end_t = end_dt.strftime("%H:%M") if end_dt else "?"
+                slots.append((start_dt, f"- {start_t}–{end_t} {t.get('title', '')}"))
+            except (ValueError, TypeError):
+                continue
+        slots.sort(key=lambda x: x[0])
+        return "\n".join(s[1] for s in slots)
     except Exception:
-        return None
+        return ""
+
 
 router = Router(name="buttons")
 
@@ -270,7 +305,8 @@ async def btn_summary(message: Message, bot: Bot) -> None:
 
     if not message.from_user:
         return
-    prompt = _build_summary_prompt(today_str, today_iso, next_day_str, next_day_iso)
+    backlog_count = await _count_notion_backlog()
+    prompt = _build_summary_prompt(today_str, today_iso, next_day_str, next_day_iso, backlog_count)
     await _process_and_reply(bot, message.chat.id, message.from_user.id, prompt)
 
 
@@ -295,7 +331,7 @@ async def callback_summary_start(callback: CallbackQuery, bot: Bot) -> None:
 
     if not callback.from_user:
         return
-    backlog_count = _count_notion_backlog()
+    backlog_count = await _count_notion_backlog()
     prompt = _build_summary_prompt(today_str, today_iso, next_day_str, next_day_iso, backlog_count)
     await _process_and_reply(bot, callback.message.chat.id, callback.from_user.id, prompt)
 
@@ -319,7 +355,10 @@ def _build_summary_prompt(
         )
     else:
         backlog_hint = (
-            "Если PM Backlog вернул 0 задач — это подозрительно. Запроси ещё раз перед тем как сказать «бэклог пуст».\n"
+            "⚠️ ВНИМАНИЕ: предварительный подсчёт бэклога не удался из-за ошибки сети.\n"
+            "Ты ОБЯЗАН самостоятельно запросить PM Backlog через MCP и пагинировать cursor до конца.\n"
+            "ЗАПРЕЩЕНО говорить «бэклог пуст» без получения данных из Notion.\n"
+            "Если MCP вернул 0 — пагинируй ещё раз, это почти наверняка ошибка.\n"
         )
 
     return (
@@ -356,8 +395,8 @@ def _build_summary_prompt(
         "Одна фраза: мотивирующая если ≥70%, честно подстёгивающая если <70%.\n\n"
         "ШАГ 6а. Обнови закреплённые дорожные карты (если есть):\n"
         "Выполни команду:\n"
-        "TELEGRAM_TOKEN=8945688412:AAFf5U8JtSScWVT_ex7u2T5M9Zvwj2dKZ8Y "
-        "TELEGRAM_CHAT_ID=257352741 "
+        f"TELEGRAM_TOKEN={os.environ.get('TELEGRAM_BOT_TOKEN', '')} "
+        f"TELEGRAM_CHAT_ID={os.environ.get('TELEGRAM_CHAT_ID', '257352741')} "
         "/home/brain/projects/agent-second-brain/.venv/bin/python "
         "/home/brain/projects/agent-second-brain/scripts/update_roadmap_pin.py\n"
         "Если файлов дорожных карт нет — пропусти.\n\n"
@@ -367,7 +406,13 @@ def _build_summary_prompt(
         f"7а. Вызови get_tasks_by_date с date=\"{next_day_iso}\" — это занятые слоты.\n"
         "Из результата выпиши ВСЕ задачи у которых есть startDate — это уже запланировано, не предлагай их повторно.\n"
         "Запомни названия уже запланированных задач — они НЕ кандидаты для добавления.\n\n"
-        f"7б. Запроси PM Backlog — задачи со статусом «Бэклог» и «Спринт неделя».\n"
+        f"7б. Найди просроченные задачи через bash:\n"
+        "```bash\n"
+        f"TT_TOKEN='{os.environ.get('TICKTICK_TOKEN', '')}'\n"
+        f"for PID in 6966e0a0c2c61184ed479a01 6966e1ccaa621184ed479b56 6966e2b53fc19184ed479f22 6966e308c2e99184ed479fb3 inbox13059360; do\n"
+        f"  curl -s \"https://api.ticktick.com/open/v1/project/${{PID}}/data\" -H \"Authorization: Bearer ${{TT_TOKEN}}\" | python3 -c \"\nimport json,sys\ndata=json.load(sys.stdin)\nfor t in data.get('tasks',[]):\n    due=(t.get('dueDate') or '')[:10]\n    if due and due < '{next_day_iso}' and not t.get('completedTime'):\n        print(due+'|'+t.get('title','')[:50])\n\"\ndone\n```\n"
+        "Если есть просроченные — покажи блоком 🔴 **Просроченные задачи** ПЕРЕД планом.\n\n"
+        f"7в. Запроси PM Backlog — задачи со статусом «Бэклог» и «Спринт неделя».\n"
         f"{backlog_hint}"
         "СТРОГО: кандидатами могут быть ТОЛЬКО задачи из PM Backlog. Не добавляй задачи из контекста разговора, "
         "не придумывай задачи — только то, что реально есть в PM Backlog.\n"
@@ -377,7 +422,9 @@ def _build_summary_prompt(
         "7г. Покажи план и жди подтверждения. После — добавь задачи в TickTick "
         f"с startDatetime=\"{next_day_iso}THH:MM\" и endDatetime=\"{next_day_iso}THH:MM\", "
         "обнови статус в Notion на «Спринт неделя».\n\n"
-        "Отвечай по-русски."
+        "Отвечай по-русски.\n\n"
+        "ЗАПРЕЩЕНО использовать фразы «Бэклог чист», «беклог пуст», «бэклог пуст» — "
+        "они вводят в заблуждение. Если задач на завтра нет — напиши явно сколько задач в бэклоге и почему они не подходят."
     )
 
 
@@ -388,35 +435,75 @@ async def callback_plan_skip(callback: CallbackQuery) -> None:
     await callback.message.edit_text("⏰ Хорошо, вернёмся к планированию позже.")
 
 
-def _build_plan_prompt(day_label: str, date_str: str, date_iso: str) -> str:
+def _build_plan_prompt(day_label: str, date_str: str, date_iso: str, occupied_slots: str = "") -> str:
+    ROADMAPS_DIR = "/home/brain/projects/agent-second-brain/data/roadmaps"
+    TT_TOKEN = os.environ.get("TICKTICK_TOKEN", "")
+    TT_PROJECTS = "6966e0a0c2c61184ed479a01 6966e1ccaa621184ed479b56 6966e2b53fc19184ed479f22 6966e308c2e99184ed479fb3 inbox13059360"
+
+    if occupied_slots:
+        step1 = (
+            f"ШАГ 1 — ЗАНЯТЫЕ СЛОТЫ (уже получено из TickTick API, UTC→UTC+10 пересчитано):\n"
+            f"{occupied_slots}\n"
+            "- 13:00–14:00 Обед\n\n"
+            "ПРАВИЛО: каждая строка выше — заблокированное время. Новые задачи туда ставить запрещено.\n"
+            "Свободные окна = 09:00–18:00 за вычетом всех перечисленных слотов.\n"
+            "Выведи этот список в разделе «📌 Уже занято» без изменений и без сокращений.\n"
+            "get_tasks_by_date вызывать НЕ нужно — данные уже есть выше.\n\n"
+        )
+    else:
+        step1 = (
+            f"ШАГ 1. Вызови get_tasks_by_date с date=\"{date_iso}\".\n"
+            "ПРАВИЛО: КАЖДАЯ задача из результата — это занятый слот. Без исключений.\n"
+            "Для каждой задачи: запомни startTime и endTime — это заблокированное время.\n"
+            "Добавь в занятые: 13:00–14:00 (обед).\n"
+            "Свободные окна = 09:00–18:00 минус все занятые слоты.\n"
+            "Выпиши ВСЕ полученные задачи списком (название + время).\n\n"
+        )
+
     return (
         f"Максим хочет собрать план на {day_label} — {date_str}.\n\n"
         "Выполни строго по шагам — не пропускай ни один:\n\n"
-        f"ШАГ 1. Вызови get_tasks_by_date с date=\"{date_iso}\".\n"
-        "Из результата выпиши все задачи у которых есть startDate/dueDate — это занятые слоты.\n"
-        "Построй список занятых интервалов: [(09:00–10:30), (14:00–15:00), ...].\n"
-        "Рабочее окно: 09:00–18:00. Вычти занятые слоты → получи список СВОБОДНЫХ окон.\n"
-        "ВАЖНО: 13:00–14:00 — обед, всегда заблокирован, никогда не предлагать под задачи.\n"
-        "ВАЖНО: задачи с тегом 'platrum' — жёсткие назначения из внешней системы, их нельзя двигать.\n"
-        "Запомни эти свободные окна — в них и только в них можно ставить новые задачи.\n\n"
-        "ШАГ 2. Получи кандидатов из Notion PM Backlog "
-        "(Database ID: 22876284-e92f-4866-a908-3a3bda425637) "
-        "со статусом «Бэклог» или «Спринт неделя». Приоритет: P1 → P2 → P3.\n\n"
-        "ШАГ 3. Расставь задачи-кандидаты по свободным окнам.\n"
-        "ПРАВИЛО: новая задача не может пересекаться ни с одним занятым слотом из шага 1.\n"
-        "Задачи идут друг за другом без пауз между ними.\n"
-        "Если свободного времени мало — возьми только самые важные задачи.\n\n"
-        "ШАГ 4. Покажи итог и жди подтверждения.\n\n"
-        f"ШАГ 5. После подтверждения: добавь каждую задачу в TickTick через add_task, "
-        f"передавай startDatetime=\"{date_iso}THH:MM\" и endDatetime=\"{date_iso}THH:MM\" "
-        "с точным временем начала и конца из плана. Без этих полей задача встанет без длительности. "
-        "Затем обнови статус в Notion на «Спринт неделя».\n\n"
-        "Отвечай по-русски, кратко. Формат ответа:\n"
-        "📌 Уже занято: 09:00–10:00 Встреча, 14:00–15:00 Звонок\n"
-        "🕐 Свободно: 10:15–13:45, 15:15–18:00\n"
+        + step1 +
+        "ШАГ 2. Найди ПРОСРОЧЕННЫЕ задачи в TickTick (🔴 Приоритет 1 — ставим в план первыми):\n"
+        f"```bash\nfor PID in {TT_PROJECTS}; do\n"
+        f"  curl -s \"https://api.ticktick.com/open/v1/project/${{PID}}/data\" -H \"Authorization: Bearer {TT_TOKEN}\" | "
+        f"python3 -c \"\nimport json,sys\ndata=json.load(sys.stdin)\nfor t in data.get('tasks',[]):\n"
+        f"    due=(t.get('dueDate') or '')[:10]\n"
+        f"    if due and due < '{date_iso}' and not t.get('completedTime'):\n"
+        f"        print(due+'|'+t.get('title','')[:60])\n\"\ndone\n```\n"
+        "Это задачи которые уже просрочены — их нужно закрыть сегодня в первую очередь.\n\n"
+
+        f"ШАГ 3. Найди задачи из ДОРОЖНЫХ КАРТ проектов (🟡 Приоритет 2 — ставим вторыми):\n"
+        f"Прочитай все JSON-файлы из папки {ROADMAPS_DIR}/ командой:\n"
+        f"```bash\nls {ROADMAPS_DIR}/*.json 2>/dev/null && "
+        f"python3 -c \"\nimport json,os,glob\nfor f in glob.glob('{ROADMAPS_DIR}/*.json'):\n"
+        f"    d=json.load(open(f))\n"
+        f"    for t in d.get('tasks',[]):\n"
+        f"        if t.get('date','') <= '{date_iso}':\n"
+        f"            print(t.get('date','')+'|'+d['project']+'|'+t.get('name','')[:50]+'|'+t.get('notion_id',''))\n\"\n```\n"
+        "Это задачи из активных проектов с дедлайном сегодня или ранее — их нужно сделать во вторую очередь.\n\n"
+
+        "ШАГ 4. Получи обычные задачи из Notion PM Backlog (⚪ Приоритет 3 — ставим последними):\n"
+        "(Database ID: 22876284-e92f-4866-a908-3a3bda425637), статус «Бэклог» или «Спринт неделя», "
+        "ответственный = Максим. Сортировка P1 → P2 → P3.\n\n"
+
+        "ШАГ 5. Расставь кандидатов ТОЛЬКО в свободные окна строго в порядке приоритета:\n"
+        "  1️⃣ Сначала просроченные из ШАГ 2\n"
+        "  2️⃣ Затем задачи из дорожных карт из ШАГ 3\n"
+        "  3️⃣ Затем обычные задачи из ШАГ 4\n"
+        "Задачи идут друг за другом без пауз. Если свободных окон не хватает — оставляем в бэклоге.\n\n"
+
+        "ШАГ 6. Покажи итог и жди подтверждения. Формат:\n"
+        "📌 Уже занято:\n[полный список из ШАГ 1]\n\n"
+        "🔴 Просроченные: [список или «нет»]\n\n"
         "📋 Предлагаю добавить:\n"
-        "1. [название] — 10:15–11:30 (P1)\n"
-        "2. ..."
+        "1. [название] — ЧЧ:ММ–ЧЧ:ММ (🔴 просроченная / 🟡 проект X / ⚪ бэклог)\n"
+        "2. ...\n\n"
+
+        f"ШАГ 7. После подтверждения: добавь каждую задачу в TickTick через add_task "
+        f"с startDatetime=\"{date_iso}THH:MM:SS+10:00\" и endDatetime=\"{date_iso}THH:MM:SS+10:00\". "
+        "Обнови статус в Notion на «Спринт неделя» (только для задач из ШАГ 4).\n\n"
+        "Отвечай по-русски, кратко."
     )
 
 
@@ -447,7 +534,8 @@ async def callback_plan_date(callback: CallbackQuery, bot: Bot) -> None:
 
     if not callback.from_user:
         return
-    prompt = _build_plan_prompt(day_label, date_str, date_iso)
+    occupied_slots = _fetch_ticktick_occupied(date_iso)
+    prompt = _build_plan_prompt(day_label, date_str, date_iso, occupied_slots)
     await _process_and_reply(bot, callback.message.chat.id, callback.from_user.id, prompt)
 
 
@@ -480,5 +568,6 @@ async def callback_plan_day(callback: CallbackQuery, bot: Bot) -> None:
 
     if not callback.from_user:
         return
-    prompt = _build_plan_prompt(day_label, date_str, date_iso)
+    occupied_slots = _fetch_ticktick_occupied(date_iso)
+    prompt = _build_plan_prompt(day_label, date_str, date_iso, occupied_slots)
     await _process_and_reply(bot, callback.message.chat.id, callback.from_user.id, prompt)

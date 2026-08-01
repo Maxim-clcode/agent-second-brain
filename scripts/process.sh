@@ -27,6 +27,13 @@ fi
 # Timezone (configure in .env: TZ=Your/Timezone)
 export TZ="${TZ:-UTC}"
 
+# Fix git objects ownership — if any dirs belong to root (created by Claude Code
+# running as root), brain can't write new objects → git add fails with exit 128.
+# This is idempotent and harmless when all objects already belong to brain.
+if [ -d "$PROJECT_DIR/.git/objects" ]; then
+    find "$PROJECT_DIR/.git/objects" -not -user "$(whoami)" -exec chown "$(whoami)" {} + 2>/dev/null || true
+fi
+
 # Date and chat_id
 TODAY=$(date +%Y-%m-%d)
 CHAT_ID="${ALLOWED_USER_IDS//[\[\] ]/}"  # strip brackets/spaces from [123, 456]

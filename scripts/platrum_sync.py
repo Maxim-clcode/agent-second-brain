@@ -12,7 +12,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -31,10 +31,10 @@ PLATRUM_USERS = {
     "bfd4771e123941e14d9a1ac0578300da": "Саша",
 }
 
-TICKTICK_TOKEN = "tp_370240d2191b485496c72cc7c5522326"
+TICKTICK_TOKEN = os.environ["TICKTICK_TOKEN"]
 TICKTICK_BASE = "https://api.ticktick.com/open/v1"
 
-NOTION_TOKEN = "NOTION_TOKEN_REDACTED"
+NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 NOTION_PM_BACKLOG = "22876284-e92f-4866-a908-3a3bda425637"
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
@@ -44,27 +44,31 @@ VL_TZ = ZoneInfo("Asia/Vladivostok")
 STATE_FILE = Path(__file__).parent.parent / "data" / "platrum_seen.json"
 
 
-def load_state() -> tuple[set, dict, set, dict]:
-    """Return (seen, partial, seen_auditor, notion_map).
+def load_state() -> tuple[set, dict, set, dict, dict, dict]:
+    """Return (seen, partial, seen_auditor, notion_map, date_map, tt_map).
     seen         = platrum IDs where Maxim is responsible — TT+Notion done
-    partial      = {platrum_id: {"tt_done": bool, "attempts": int}}
+    partial      = {platrum_id: {"tt_done": bool, "attempts": int, ...cached fields}}
     seen_auditor = platrum IDs where Maxim is auditor — Notion done
     notion_map   = {platrum_id: notion_page_id} — for completion tracking
+    date_map     = {platrum_id: "YYYY-MM-DD"} — last known finish_date for change detection
+    tt_map       = {platrum_id: {"id": tt_task_id, "projectId": ...}} — for TickTick updates
     """
     if STATE_FILE.exists():
         raw = json.loads(STATE_FILE.read_text())
         if isinstance(raw, list):
-            return set(raw), {}, set(), {}
+            return set(raw), {}, set(), {}, {}, {}
         return (
             set(raw.get("seen", [])),
             raw.get("partial", {}),
             set(raw.get("seen_auditor", [])),
             raw.get("notion_map", {}),
+            raw.get("date_map", {}),
+            raw.get("tt_map", {}),
         )
-    return set(), {}, set(), {}
+    return set(), {}, set(), {}, {}, {}
 
 
-def save_state(seen: set, partial: dict, seen_auditor: set, notion_map: dict) -> None:
+def save_state(seen: set, partial: dict, seen_auditor: set, notion_map: dict, date_map: dict, tt_map: dict) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(
         {
@@ -72,6 +76,8 @@ def save_state(seen: set, partial: dict, seen_auditor: set, notion_map: dict) ->
             "partial": partial,
             "seen_auditor": sorted(seen_auditor),
             "notion_map": notion_map,
+            "date_map": date_map,
+            "tt_map": tt_map,
         },
         indent=2,
     ))
@@ -84,8 +90,8 @@ def load_seen() -> set:
 
 
 def save_seen(seen: set) -> None:
-    _, partial, seen_auditor, notion_map = load_state()
-    save_state(seen, partial, seen_auditor, notion_map)
+    _, partial, seen_auditor, notion_map, date_map, tt_map = load_state()
+    save_state(seen, partial, seen_auditor, notion_map, date_map, tt_map)
 
 
 def _with_retry(fn, *args, retries: int = 3, delay: float = 5.0, **kwargs) -> bool:
@@ -143,7 +149,8 @@ def resolve_responsible(responsible_user_ids: list) -> str | None:
     return None
 
 
-def add_ticktick(name: str, description: str, start_iso: str | None, finish_iso: str, is_important: bool) -> bool:
+def add_ticktick(name: str, description: str, start_iso: str | None, finish_iso: str, is_important: bool) -> dict | None:
+    """Create a TickTick task. Returns {"id": ..., "projectId": ...} or None on failure."""
     priority = 3 if is_important else 1  # TickTick: 0=none,1=low,3=medium,5=high
 
     has_time = start_iso and start_iso != finish_iso
@@ -168,7 +175,121 @@ def add_ticktick(name: str, description: str, start_iso: str | None, finish_iso:
         json=body,
         timeout=30,
     )
+    if r.status_code == 200:
+        data = r.json()
+        return {"id": data.get("id"), "projectId": data.get("projectId")}
+    return None
+
+
+def _add_ticktick_with_retry(
+    name: str, description: str, start_iso: str | None, finish_iso: str, is_important: bool,
+    retries: int = 3, delay: float = 5.0,
+) -> dict | None:
+    for attempt in range(retries):
+        try:
+            result = add_ticktick(name, description, start_iso, finish_iso, is_important)
+            if result:
+                return result
+        except Exception as exc:
+            print(f"  attempt {attempt + 1} error: {exc}")
+        if attempt < retries - 1:
+            time.sleep(delay)
+    return None
+
+
+def update_ticktick_date(tt_task_id: str, project_id: str | None, finish_iso: str) -> bool:
+    """Update due date of an existing TickTick task."""
+    body: dict = {"dueDate": finish_iso, "timeZone": "Asia/Vladivostok"}
+    if project_id:
+        body["projectId"] = project_id
+    r = requests.post(
+        f"{TICKTICK_BASE}/task/{tt_task_id}",
+        headers={
+            "Authorization": f"Bearer {TICKTICK_TOKEN}",
+            "Content-Type": "application/json",
+        },
+        json=body,
+        timeout=30,
+    )
     return r.status_code == 200
+
+
+def _current_week_range() -> tuple[date, date]:
+    today = datetime.now(VL_TZ).date()
+    week_start = today - timedelta(days=today.weekday())  # Monday
+    week_end = week_start + timedelta(days=6)             # Sunday
+    return week_start, week_end
+
+
+def update_notion_deadline(page_id: str, deadline_date: str | None) -> bool:
+    """Update deadline and recalculate status (Спринт неделе / Бэклог) on a Notion page."""
+    week_start, week_end = _current_week_range()
+    if deadline_date:
+        d = date.fromisoformat(deadline_date)
+        status = "Спринт неделе" if week_start <= d <= week_end else "Бэклог"
+    else:
+        status = "Бэклог"
+    props: dict = {"Статус": {"select": {"name": status}}}
+    if deadline_date:
+        props["Дедлайн"] = {"date": {"start": deadline_date}}
+    r = requests.patch(
+        f"https://api.notion.com/v1/pages/{page_id}",
+        headers={
+            "Authorization": f"Bearer {NOTION_TOKEN}",
+            "Notion-Version": "2022-06-28",
+            "Content-Type": "application/json",
+        },
+        json={"properties": props},
+        timeout=15,
+    )
+    return r.status_code == 200
+
+
+def auto_promote_backlog() -> int:
+    """Move Notion tasks Бэклог → Спринт неделе if their deadline falls in the current week."""
+    week_start, week_end = _current_week_range()
+    r = requests.post(
+        f"https://api.notion.com/v1/databases/{NOTION_PM_BACKLOG}/query",
+        headers={
+            "Authorization": f"Bearer {NOTION_TOKEN}",
+            "Notion-Version": "2022-06-28",
+            "Content-Type": "application/json",
+        },
+        json={
+            "filter": {
+                "and": [
+                    {"property": "Статус", "select": {"equals": "Бэклог"}},
+                    {"property": "Дедлайн", "date": {"on_or_after": week_start.isoformat()}},
+                    {"property": "Дедлайн", "date": {"on_or_before": week_end.isoformat()}},
+                ]
+            }
+        },
+        timeout=30,
+    )
+    if r.status_code != 200:
+        print(f"  auto_promote_backlog query failed: {r.status_code}")
+        return 0
+    promoted = 0
+    for page in r.json().get("results", []):
+        page_id = page["id"]
+        title_cells = page.get("properties", {}).get("Задача", {}).get("title", [])
+        name = title_cells[0].get("plain_text", "") if title_cells else page_id
+        rp = requests.patch(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            headers={
+                "Authorization": f"Bearer {NOTION_TOKEN}",
+                "Notion-Version": "2022-06-28",
+                "Content-Type": "application/json",
+            },
+            json={"properties": {"Статус": {"select": {"name": "Спринт неделе"}}}},
+            timeout=15,
+        )
+        if rp.status_code == 200:
+            promoted += 1
+            print(f"  📅 Promoted to Спринт неделе: {name[:60]}")
+        else:
+            print(f"  ❌ Failed to promote: {name[:60]}")
+    return promoted
 
 
 def create_notion_page(
@@ -257,7 +378,7 @@ def _create_notion_with_retry(retries: int = 3, delay: float = 5.0, **kwargs) ->
 
 
 def main():
-    seen, partial, seen_auditor, notion_map = load_state()
+    seen, partial, seen_auditor, notion_map, date_map, tt_map = load_state()
     tasks = platrum_tasks()
     auditor_tasks = platrum_auditor_tasks()
 
@@ -291,21 +412,67 @@ def main():
             else:
                 print(f"  ❌ Не удалось обновить Выполнено [{platrum_id}]")
 
-    # --- Retry partial (TickTick succeeded before, Notion failed) ---
+    # --- Auto-promote backlog tasks whose deadline is now in the current week ---
+    promoted = auto_promote_backlog()
+
+    # --- Check for date changes in already-tracked responsible tasks ---
     task_map = {str(t["id"]): t for t in tasks}
-    retried = []
-    for task_id, info in list(partial.items()):
-        task = task_map.get(task_id)
-        if not task:
-            del partial[task_id]
+    updated_count = 0
+    for platrum_id, known_date in list(date_map.items()):
+        task = task_map.get(platrum_id)
+        if not task or task.get("is_finished") or task.get("deletion_date"):
+            continue
+        if not task.get("finish_date"):
+            continue
+        finish_dt = datetime.fromisoformat(task["finish_date"].replace("Z", "+00:00"))
+        new_deadline = finish_dt.astimezone(VL_TZ).date().isoformat()
+        if new_deadline == known_date:
             continue
 
+        # Date changed — update TickTick and Notion
+        old_date = known_date
+        date_map[platrum_id] = new_deadline
         name = task["name"]
-        description = task.get("description") or ""
-        is_important = task.get("is_important", False)
-        finish_dt = datetime.fromisoformat(task["finish_date"].replace("Z", "+00:00"))
-        finish_local = finish_dt.astimezone(VL_TZ)
-        deadline_date = finish_local.date().isoformat()
+        finish_iso = task["finish_date"].replace("Z", "+00:00")
+
+        tt_info = tt_map.get(platrum_id)
+        tt_updated = False
+        if tt_info and tt_info.get("id"):
+            tt_updated = update_ticktick_date(tt_info["id"], tt_info.get("projectId"), finish_iso)
+
+        notion_page_id = notion_map.get(platrum_id)
+        nt_updated = False
+        if notion_page_id:
+            nt_updated = update_notion_deadline(notion_page_id, new_deadline)
+
+        tt_icon = "✅" if tt_updated else ("⚠️ нет ID" if not tt_info else "❌")
+        nt_icon = "✅" if nt_updated else "❌"
+        notify(
+            f"📅 <b>Задача перенесена (Platrum)</b>\n"
+            f"📌 {name}\n"
+            f"🗓 {old_date} → {new_deadline}\n"
+            f"{tt_icon} TickTick  {nt_icon} Notion"
+        )
+        print(f"Date updated [{platrum_id}]: {name[:60]}  {old_date} → {new_deadline}  tt={tt_updated} nt={nt_updated}")
+        updated_count += 1
+
+    # --- Retry partial (TickTick succeeded before, Notion failed) ---
+    retried = []
+    for task_id, info in list(partial.items()):
+        # Use cached task data — task may already be gone from Platrum API
+        name = info.get("name") or (task_map.get(task_id) or {}).get("name", task_id)
+        description = info.get("description", "")
+        deadline_date = info.get("deadline_date")
+        is_important = info.get("is_important", False)
+
+        # Fallback: if no cached data and task still in API, extract from there
+        if not info.get("name") and task_map.get(task_id):
+            task = task_map[task_id]
+            name = task["name"]
+            description = task.get("description") or ""
+            is_important = task.get("is_important", False)
+            finish_dt = datetime.fromisoformat(task["finish_date"].replace("Z", "+00:00"))
+            deadline_date = finish_dt.astimezone(VL_TZ).date().isoformat()
 
         attempts = info.get("attempts", 0) + 1
         page_id = _create_notion_with_retry(
@@ -352,7 +519,8 @@ def main():
         finish_iso = task["finish_date"].replace("Z", "+00:00")
         start_iso = task["start_date"].replace("Z", "+00:00") if task.get("start_date") else None
 
-        tt_ok = _with_retry(add_ticktick, name, description, start_iso, finish_iso, is_important)
+        tt_result = _add_ticktick_with_retry(name, description, start_iso, finish_iso, is_important)
+        tt_ok = tt_result is not None
         page_id = _create_notion_with_retry(
             name=name, description=description, deadline_date=deadline_date, is_important=is_important,
         )
@@ -361,9 +529,17 @@ def main():
         if tt_ok and nt_ok:
             seen.add(task_id)
             notion_map[task_id] = page_id
+            date_map[task_id] = deadline_date
+            tt_map[task_id] = tt_result
         elif tt_ok and not nt_ok:
-            partial[task_id] = {"tt_done": True, "attempts": 1}
+            partial[task_id] = {
+                "tt_done": True, "attempts": 1,
+                "name": name, "description": description,
+                "deadline_date": deadline_date, "is_important": is_important,
+            }
             seen.add(task_id)
+            date_map[task_id] = deadline_date
+            tt_map[task_id] = tt_result
         else:
             print(f"  TickTick failed for [{task_id}] — will retry next run")
 
@@ -423,8 +599,8 @@ def main():
         else:
             print(f"  Notion failed for auditor task [{task_id}]: {name}")
 
-    save_state(seen, partial, seen_auditor, notion_map)
-    print(f"Done. {len(new_tasks)} new, {len(retried)} retried, {len(new_auditor)} auditor, {done_count} completed.")
+    save_state(seen, partial, seen_auditor, notion_map, date_map, tt_map)
+    print(f"Done. {len(new_tasks)} new, {len(retried)} retried, {len(new_auditor)} auditor, {done_count} completed, {updated_count} date-updated, {promoted} promoted.")
 
 
 if __name__ == "__main__":

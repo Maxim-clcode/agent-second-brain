@@ -8,7 +8,8 @@
       ],
       "env": {
         "API_TOKEN": "tp_370240d2191b485496c72cc7c5522326",
-        "API_DOMAIN": "api.ticktick.com"
+        "API_DOMAIN": "api.ticktick.com",
+        "TZ": "Asia/Vladivostok"
       }
     }
   }

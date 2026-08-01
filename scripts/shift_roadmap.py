@@ -11,6 +11,7 @@ Logic:
 """
 
 import json
+import os
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -18,11 +19,11 @@ from zoneinfo import ZoneInfo
 import holidays
 import httpx
 
-NOTION_TOKEN = "NOTION_TOKEN_REDACTED"
+NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 NOTION_PM_BACKLOG = "22876284-e92f-4866-a908-3a3bda425637"
-TICKTICK_TOKEN = "tp_370240d2191b485496c72cc7c5522326"
-TELEGRAM_TOKEN = "8945688412:AAFf5U8JtSScWVT_ex7u2T5M9Zvwj2dKZ8Y"
-TELEGRAM_CHAT_ID = "257352741"
+TICKTICK_TOKEN = os.environ["TICKTICK_TOKEN"]
+TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "257352741")
 ROADMAPS_DIR = Path(__file__).parent.parent / "data" / "roadmaps"
 VL_TZ = ZoneInfo("Asia/Vladivostok")
 RU_HOLIDAYS = holidays.Russia()
@@ -136,9 +137,9 @@ def ticktick_update_task(task_id: str, project_id: str, new_date: date, start_ti
         return False
 
 
-def ticktick_update_by_stored_id(ticktick_id: str, new_date: date, start_time: str, end_time: str) -> bool:
+def ticktick_update_by_stored_id(ticktick_id: str, project_id: str, new_date: date, start_time: str, end_time: str) -> bool:
     """Update TickTick task using stored ID from roadmap JSON — no search needed."""
-    return ticktick_update_task(ticktick_id, "", new_date, start_time, end_time)
+    return ticktick_update_task(ticktick_id, project_id, new_date, start_time, end_time)
 
 
 def send_telegram(text: str) -> None:
@@ -228,16 +229,22 @@ def process_roadmap(path: Path, today: date) -> bool:
             task = dict(task)
             task["date"] = new_date.isoformat()
 
-            # Update TickTick — prefer stored ticktick_id, fall back to name search
+            # Update TickTick — prefer stored ticktick_id+projectId, fall back to name search
             stored_id = task.get("ticktick_id", "")
+            stored_project = task.get("ticktick_project_id", "")
             if stored_id:
                 ok = ticktick_update_by_stored_id(
-                    stored_id, new_date,
+                    stored_id, stored_project, new_date,
                     task.get("start", "09:00"),
                     task.get("end", "10:00"),
                 )
                 print(f"    TickTick(id) {'✅' if ok else '❌'}: {task['name'][:50]} → {new_date}")
-            else:
+                if not ok:
+                    # Stored ID failed — fall back to search (task may have been recreated)
+                    task.pop("ticktick_id", None)
+                    task.pop("ticktick_project_id", None)
+                    stored_id = ""
+            if not stored_id:
                 tt_task = ticktick_find_task(task["name"], task_date)
                 if tt_task:
                     ok = ticktick_update_task(
@@ -249,7 +256,8 @@ def process_roadmap(path: Path, today: date) -> bool:
                     )
                     print(f"    TickTick(search) {'✅' if ok else '❌'}: {task['name'][:50]} → {new_date}")
                     if ok:
-                        task["ticktick_id"] = tt_task["id"]  # store for next time
+                        task["ticktick_id"] = tt_task["id"]
+                        task["ticktick_project_id"] = tt_task.get("projectId", "")
                 else:
                     print(f"    TickTick not found: {task['name'][:50]}")
 
@@ -330,16 +338,22 @@ def force_shift_roadmap(path: Path, days: int, from_date: date | None = None) ->
             task = dict(task)
             task["date"] = new_date.isoformat()
 
-            # Update TickTick — prefer stored ticktick_id, fall back to name search
+            # Update TickTick — prefer stored ticktick_id+projectId, fall back to name search
             stored_id = task.get("ticktick_id", "")
+            stored_project = task.get("ticktick_project_id", "")
             if stored_id:
                 ok = ticktick_update_by_stored_id(
-                    stored_id, new_date,
+                    stored_id, stored_project, new_date,
                     task.get("start", "09:00"),
                     task.get("end", "10:00"),
                 )
                 print(f"    TickTick(id) {'✅' if ok else '❌'}: {task['name'][:50]} → {new_date}")
-            else:
+                if not ok:
+                    # Stored ID failed — fall back to search (task may have been recreated)
+                    task.pop("ticktick_id", None)
+                    task.pop("ticktick_project_id", None)
+                    stored_id = ""
+            if not stored_id:
                 tt_task = ticktick_find_task(task["name"], task_date)
                 if tt_task:
                     ok = ticktick_update_task(
@@ -351,7 +365,8 @@ def force_shift_roadmap(path: Path, days: int, from_date: date | None = None) ->
                     )
                     print(f"    TickTick(search) {'✅' if ok else '❌'}: {task['name'][:50]} → {new_date}")
                     if ok:
-                        task["ticktick_id"] = tt_task["id"]  # store for next time
+                        task["ticktick_id"] = tt_task["id"]
+                        task["ticktick_project_id"] = tt_task.get("projectId", "")
                 else:
                     print(f"    TickTick not found: {task['name'][:50]}")
 

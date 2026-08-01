@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 # User-facing messages for non-ok session outcomes (Telegram HTML).
 _STATUS_MESSAGES = {
-    "rate_limited": "⏳ <b>Лимит подписки исчерпан.</b> Вернусь, когда он обновится.",
+    "rate_limited": "⏳ <b>Claude временно перегружен.</b> Подожди 1–2 минуты и попробуй снова.",
     "logged_out": (
         "🔑 <b>Сессии нужен повторный вход.</b> Админу: <code>dbrain login</code>."
     ),
