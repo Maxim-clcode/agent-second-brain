@@ -370,6 +370,11 @@ async def handle_chat_text(message: Message, bot: Bot) -> None:
     fwd = forward_note(getattr(message, "forward_origin", None))
     text = f"{fwd}{message.text}" if fwd else message.text
 
+    # If this message is a reply to another message, prepend its text as context
+    reply = getattr(message, "reply_to_message", None)
+    if reply and getattr(reply, "text", None):
+        text = f"[контекст — сообщение выше, на которое ответили]:\n{reply.text}\n\n[ответ пользователя]:\n{text}"
+
     # Safety net: save to daily
     timestamp = datetime.fromtimestamp(message.date.timestamp())
     storage.append_to_daily(text, timestamp, "[forward]" if fwd else "[text]")

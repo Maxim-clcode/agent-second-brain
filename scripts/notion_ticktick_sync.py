@@ -126,14 +126,25 @@ def parse_task(page: dict) -> dict | None:
 
     date_prop = (props.get("Дедлайн", {}).get("date") or {})
     deadline = None
-    raw = date_prop.get("start", "")
-    if raw:
+    start_time: time | None = None
+    end_time: time | None = None
+    raw_start = date_prop.get("start", "")
+    raw_end = date_prop.get("end", "")
+    if raw_start:
         try:
-            deadline = date.fromisoformat(raw[:10])
+            deadline = date.fromisoformat(raw_start[:10])
+            if len(raw_start) > 10:
+                start_time = datetime.fromisoformat(raw_start).astimezone(VL).time()
+                if raw_end and len(raw_end) > 10:
+                    end_time = datetime.fromisoformat(raw_end).astimezone(VL).time()
         except ValueError:
             pass
 
-    return {"id": page["id"], "title": title, "status": status, "deadline": deadline, "duration": duration}
+    return {
+        "id": page["id"], "title": title, "status": status,
+        "deadline": deadline, "duration": duration,
+        "start_time": start_time, "end_time": end_time,
+    }
 
 
 def notion_set_status(page_id: str, status: str) -> bool:
@@ -332,6 +343,8 @@ def main() -> None:
         deadline: date | None = task["deadline"]
         status = task["status"]
         duration = task["duration"]
+        notion_start_time: time | None = task["start_time"]
+        notion_end_time: time | None = task["end_time"]
         page_id = task["id"]
         short = title[:45]
 
@@ -376,10 +389,15 @@ def main() -> None:
                 if status != "Спринт неделя":
                     notion_set_status(page_id, "Спринт неделя")
                 if page_id not in notified_today and page_id not in muted_pages:
+                    time_str = notion_start_time.strftime("%H:%M") if notion_start_time else "09:00"
+                    end_str = notion_end_time.strftime("%H:%M") if notion_end_time else ""
+                    range_str = f"{time_str}–{end_str}" if end_str else time_str
                     telegram_notify(
                         f"📋 <b>Задача не в TickTick</b>\n"
-                        f"«{title}» есть в Notion на сегодня, но не найдена в TickTick.\n"
-                        f"Добавь вручную если нужно."
+                        f"«{title}»\n"
+                        f"📅 {deadline.strftime('%d.%m.%Y')} {range_str} | ⏱ {duration} мин\n"
+                        f"🔑 notion_page_id: {page_id}\n"
+                        f"Ответь «добавь» чтобы поставить в TickTick."
                     )
                     notified_today.add(page_id)
                     print(f"  📲 Уведомление отправлено (today, not in TT): {short}")
@@ -392,27 +410,21 @@ def main() -> None:
                     print(f"  ↑ Спринт неделя (TT API unreliable, no create): {short}")
                 continue
 
-            slot = find_free_slot(deadline, duration)
-            if slot:
-                s_t, e_t = slot
-                ok = tt_create_task(title, deadline, s_t, e_t)
-                if ok:
-                    _tt_day_cache.pop(deadline, None)  # invalidate cache
-                    if status != "Спринт неделя":
-                        notion_set_status(page_id, "Спринт неделя")
-                    print(f"  ➕ TT created {deadline} {s_t.strftime('%H:%M')}–{e_t.strftime('%H:%M')}: {short}")
-                else:
-                    print(f"  ❌ TT create failed: {short}")
+            # Use exact time from Notion if set; otherwise default to 9:00 + duration
+            s_t = notion_start_time or time(9, 0)
+            if notion_end_time:
+                e_t = notion_end_time
             else:
-                if page_id not in notified_today and page_id not in muted_pages:
-                    telegram_notify(
-                        f"⚠️ <b>Конфликт расписания</b>\n"
-                        f"«{title}» запланирована на {deadline.strftime('%d.%m')} ({duration} мин), "
-                        f"но свободного слота нет.\n"
-                        f"Скорректируй вручную."
-                    )
-                    notified_today.add(page_id)
-                print(f"  ⚠️ No free slot: {short} ({deadline})")
+                total_min = s_t.hour * 60 + s_t.minute + duration
+                e_t = time(total_min // 60, total_min % 60)
+            ok = tt_create_task(title, deadline, s_t, e_t)
+            if ok:
+                _tt_day_cache.pop(deadline, None)
+                if status != "Спринт неделя":
+                    notion_set_status(page_id, "Спринт неделя")
+                print(f"  ➕ TT created {deadline} {s_t.strftime('%H:%M')}–{e_t.strftime('%H:%M')}: {short}")
+            else:
+                print(f"  ❌ TT create failed: {short}")
 
     save_notify_state(today, notified_today, muted_pages)
     print("=== Done ===")
