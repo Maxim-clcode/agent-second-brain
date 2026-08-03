@@ -435,7 +435,7 @@ async def callback_plan_skip(callback: CallbackQuery) -> None:
     await callback.message.edit_text("⏰ Хорошо, вернёмся к планированию позже.")
 
 
-def _build_plan_prompt(day_label: str, date_str: str, date_iso: str, occupied_slots: str = "") -> str:
+def _build_plan_prompt(day_label: str, date_str: str, date_iso: str, occupied_slots: str = "", backlog_count: int | None = None) -> str:
     ROADMAPS_DIR = "/home/brain/projects/agent-second-brain/data/roadmaps"
     TT_TOKEN = os.environ.get("TICKTICK_TOKEN", "")
     TT_PROJECTS = "6966e0a0c2c61184ed479a01 6966e1ccaa621184ed479b56 6966e2b53fc19184ed479f22 6966e308c2e99184ed479fb3 inbox13059360"
@@ -470,8 +470,8 @@ def _build_plan_prompt(day_label: str, date_str: str, date_iso: str, occupied_sl
         f"python3 -c \"\nimport json,sys\ndata=json.load(sys.stdin)\nfor t in data.get('tasks',[]):\n"
         f"    due=(t.get('dueDate') or '')[:10]\n"
         f"    if due and due < '{date_iso}' and not t.get('completedTime'):\n"
-        f"        print(due+'|'+t.get('title','')[:60])\n\"\ndone\n```\n"
-        "Это задачи которые уже просрочены — их нужно закрыть сегодня в первую очередь.\n\n"
+        f"        print(t.get('id','')+'|'+t.get('projectId','')+'|'+due+'|'+t.get('title','')[:60])\n\"\ndone\n```\n"
+        "Запомни для каждой просроченной задачи: id и projectId — они понадобятся на шаге 7 чтобы ОБНОВИТЬ дату, а не создать новую.\n\n"
 
         f"ШАГ 3. Найди задачи из ДОРОЖНЫХ КАРТ проектов (🟡 Приоритет 2 — ставим вторыми):\n"
         f"Прочитай все JSON-файлы из папки {ROADMAPS_DIR}/ командой:\n"
@@ -500,9 +500,29 @@ def _build_plan_prompt(day_label: str, date_str: str, date_iso: str, occupied_sl
         "1. [название] — ЧЧ:ММ–ЧЧ:ММ (🔴 просроченная / 🟡 проект X / ⚪ бэклог)\n"
         "2. ...\n\n"
 
-        f"ШАГ 7. После подтверждения: добавь каждую задачу в TickTick через add_task "
-        f"с startDatetime=\"{date_iso}THH:MM:SS+10:00\" и endDatetime=\"{date_iso}THH:MM:SS+10:00\". "
-        "Обнови статус в Notion на «Спринт неделя» (только для задач из ШАГ 4).\n\n"
+        f"ШАГ 7. После подтверждения действуй по типу задачи:\n"
+        f"  🔴 Просроченные (из ШАГ 2) — они уже ЕСТЬ в TickTick, нужно только перенести дату.\n"
+        f"    Используй update_task с id и projectId которые запомнил на шаге 2.\n"
+        f"    НЕ создавай новую задачу через add_task — иначе будет дубль.\n"
+        f"    ВАЖНО: дата и время берётся из того что согласовал пользователь на шаге 6.\n"
+        f"    Если пользователь явно назвал дату/время (например «сегодня в 13:00») — используй именно их.\n"
+        f"    Правило об обеде 13:00–14:00 действует только при автоматическом подборе слотов.\n"
+        f"    Если пользователь сам выбрал 13:00 — ставь в 13:00, это его решение.\n\n"
+        f"  🟡 Задачи из дорожных карт (из ШАГ 3) — аналогично, уже есть в TickTick.\n"
+        f"    Найди по названию через search_task и используй update_task.\n"
+        f"    Только если задача не найдена — создай через add_task.\n\n"
+        f"  ⚪ Задачи из Notion бэклога (из ШАГ 4) — их ещё нет в TickTick.\n"
+        f"    Создай через add_task с startDatetime=\"{date_iso}THH:MM:SS+10:00\" и endDatetime=\"{date_iso}THH:MM:SS+10:00\".\n"
+        "    Обнови статус в Notion на «Спринт неделя».\n\n"
+        + (
+            f"ℹ️ СПРАВКА: в Notion PM Backlog сейчас {backlog_count} активных задач. "
+            "Если ни одна не подходит для плана — объясни почему (просрочены, не тот ответственный и т.п.), "
+            "но НЕ говори что бэклог пуст.\n\n"
+            if backlog_count is not None else ""
+        )
+        + "ЗАПРЕЩЕНО использовать фразы «Бэклог чист», «беклог пуст», «бэклог пуст» и любые аналоги — "
+        "они вводят в заблуждение. Если задач на сегодня нет — напиши явно сколько задач в бэклоге всего "
+        "и почему они не подходят для этого дня (статус, приоритет, уже заполнен день и т.п.).\n\n"
         "Отвечай по-русски, кратко."
     )
 
@@ -535,7 +555,8 @@ async def callback_plan_date(callback: CallbackQuery, bot: Bot) -> None:
     if not callback.from_user:
         return
     occupied_slots = _fetch_ticktick_occupied(date_iso)
-    prompt = _build_plan_prompt(day_label, date_str, date_iso, occupied_slots)
+    backlog_count = await _count_notion_backlog()
+    prompt = _build_plan_prompt(day_label, date_str, date_iso, occupied_slots, backlog_count)
     await _process_and_reply(bot, callback.message.chat.id, callback.from_user.id, prompt)
 
 
@@ -569,5 +590,6 @@ async def callback_plan_day(callback: CallbackQuery, bot: Bot) -> None:
     if not callback.from_user:
         return
     occupied_slots = _fetch_ticktick_occupied(date_iso)
-    prompt = _build_plan_prompt(day_label, date_str, date_iso, occupied_slots)
+    backlog_count = await _count_notion_backlog()
+    prompt = _build_plan_prompt(day_label, date_str, date_iso, occupied_slots, backlog_count)
     await _process_and_reply(bot, callback.message.chat.id, callback.from_user.id, prompt)

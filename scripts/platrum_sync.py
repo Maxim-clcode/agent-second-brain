@@ -42,6 +42,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 VL_TZ = ZoneInfo("Asia/Vladivostok")
 STATE_FILE = Path(__file__).parent.parent / "data" / "platrum_seen.json"
+TT_NOTION_MAP_FILE = Path(__file__).parent.parent / "data" / "tt_notion_map.json"
 
 
 def load_state() -> tuple[set, dict, set, dict, dict, dict]:
@@ -222,11 +223,11 @@ def _current_week_range() -> tuple[date, date]:
 
 
 def update_notion_deadline(page_id: str, deadline_date: str | None) -> bool:
-    """Update deadline and recalculate status (Спринт неделе / Бэклог) on a Notion page."""
+    """Update deadline and recalculate status (Спринт неделя / Бэклог) on a Notion page."""
     week_start, week_end = _current_week_range()
     if deadline_date:
         d = date.fromisoformat(deadline_date)
-        status = "Спринт неделе" if week_start <= d <= week_end else "Бэклог"
+        status = "Спринт неделя" if week_start <= d <= week_end else "Бэклог"
     else:
         status = "Бэклог"
     props: dict = {"Статус": {"select": {"name": status}}}
@@ -246,7 +247,8 @@ def update_notion_deadline(page_id: str, deadline_date: str | None) -> bool:
 
 
 def auto_promote_backlog() -> int:
-    """Move Notion tasks Бэклог → Спринт неделе if their deadline falls in the current week."""
+    """Move Notion tasks Бэклог → Спринт неделя if their deadline falls in the current week.
+    Only promotes tasks where Максим is responsible — tasks of other employees stay as-is."""
     week_start, week_end = _current_week_range()
     r = requests.post(
         f"https://api.notion.com/v1/databases/{NOTION_PM_BACKLOG}/query",
@@ -261,6 +263,7 @@ def auto_promote_backlog() -> int:
                     {"property": "Статус", "select": {"equals": "Бэклог"}},
                     {"property": "Дедлайн", "date": {"on_or_after": week_start.isoformat()}},
                     {"property": "Дедлайн", "date": {"on_or_before": week_end.isoformat()}},
+                    {"property": "Ответственный", "select": {"equals": "Максим"}},
                 ]
             }
         },
@@ -281,12 +284,12 @@ def auto_promote_backlog() -> int:
                 "Notion-Version": "2022-06-28",
                 "Content-Type": "application/json",
             },
-            json={"properties": {"Статус": {"select": {"name": "Спринт неделе"}}}},
+            json={"properties": {"Статус": {"select": {"name": "Спринт неделя"}}}},
             timeout=15,
         )
         if rp.status_code == 200:
             promoted += 1
-            print(f"  📅 Promoted to Спринт неделе: {name[:60]}")
+            print(f"  📅 Promoted to Спринт неделя: {name[:60]}")
         else:
             print(f"  ❌ Failed to promote: {name[:60]}")
     return promoted
@@ -339,6 +342,231 @@ def add_notion(
     return create_notion_page(name, description, deadline_date, is_important, status, responsible) is not None
 
 
+def load_tt_notion_map() -> dict:
+    """Load {tt_task_id: {"notion_page_id": ..., "project_id": ..., "title": ...}}."""
+    if TT_NOTION_MAP_FILE.exists():
+        return json.loads(TT_NOTION_MAP_FILE.read_text())
+    return {}
+
+
+def save_tt_notion_map(m: dict) -> None:
+    TT_NOTION_MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
+    TT_NOTION_MAP_FILE.write_text(json.dumps(m, indent=2))
+
+
+def fetch_ticktick_projects() -> list[str]:
+    """Get all TickTick project IDs."""
+    r = requests.get(
+        f"{TICKTICK_BASE}/project",
+        headers={"Authorization": f"Bearer {TICKTICK_TOKEN}"},
+        timeout=20,
+    )
+    if r.status_code == 200:
+        return [p["id"] for p in r.json()]
+    return []
+
+
+TICKTICK_INBOX_ID = "inbox130591308"  # Inbox is not returned by GET /project
+
+
+def fetch_ticktick_week_tasks() -> list[dict]:
+    """Get all active TickTick tasks due this week (Mon–Sun).
+    Returns list of {id, projectId, title, dueDate}."""
+    week_start, week_end = _current_week_range()
+    project_ids = [TICKTICK_INBOX_ID] + fetch_ticktick_projects()
+    tasks = []
+    seen_ids: set[str] = set()
+    for pid in project_ids:
+        r = requests.get(
+            f"{TICKTICK_BASE}/project/{pid}/data",
+            headers={"Authorization": f"Bearer {TICKTICK_TOKEN}"},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            continue
+        for t in r.json().get("tasks", []):
+            tid = t.get("id", "")
+            if not tid or tid in seen_ids:
+                continue
+            due = (t.get("dueDate") or t.get("startDate") or "")[:10]
+            if not due:
+                continue
+            try:
+                d = date.fromisoformat(due)
+            except ValueError:
+                continue
+            if week_start <= d <= week_end and t.get("status", 0) != 2 and not t.get("completedTime"):
+                seen_ids.add(tid)
+                tasks.append({
+                    "id": tid,
+                    "projectId": t.get("projectId", pid),
+                    "title": (t.get("title") or "").strip(),
+                    "dueDate": due,
+                })
+    return tasks
+
+
+def fetch_notion_sprint_tasks() -> dict[str, str]:
+    """Get all Notion 'Спринт неделя' tasks.
+    Returns {normalized_lower_title: page_id}."""
+    result: dict[str, str] = {}
+    cursor = None
+    while True:
+        body: dict = {
+            "page_size": 100,
+            "filter": {"property": "Статус", "select": {"equals": "Спринт неделя"}},
+        }
+        if cursor:
+            body["start_cursor"] = cursor
+        r = requests.post(
+            f"https://api.notion.com/v1/databases/{NOTION_PM_BACKLOG}/query",
+            headers={"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
+            json=body, timeout=30,
+        )
+        d = r.json()
+        for row in d.get("results", []):
+            title_arr = row["properties"].get("Задача", {}).get("title", [])
+            title = (title_arr[0].get("text", {}).get("content", "") if title_arr else "").strip()
+            if title:
+                result[title.lower()] = row["id"]
+        if not d.get("has_more"):
+            break
+        cursor = d.get("next_cursor")
+    return result
+
+
+
+def sync_ticktick_to_notion_full(tt_notion_map: dict) -> tuple[int, int]:
+    """Full TickTick → Notion sync for current week.
+    Creates Notion pages for TickTick tasks missing there.
+    Closes Notion pages when TickTick task is completed/deleted.
+    Returns (created, closed)."""
+    week_start, _ = _current_week_range()
+    tt_tasks = fetch_ticktick_week_tasks()
+    notion_sprint = fetch_notion_sprint_tasks()  # lower_title → page_id
+
+    # Step 1: TickTick → Notion (create missing)
+    created = 0
+    tt_ids_active = {t["id"] for t in tt_tasks}
+    for task in tt_tasks:
+        title = task["title"]
+        if not title:
+            continue
+        lower = title.lower()
+        if lower in notion_sprint:
+            # Already in Notion — populate map if not tracked yet
+            if task["id"] not in tt_notion_map:
+                tt_notion_map[task["id"]] = {
+                    "notion_page_id": notion_sprint[lower],
+                    "project_id": task["projectId"],
+                    "title": title,
+                }
+            continue
+        # Not in Notion — create
+        page_id = create_notion_page(
+            name=title,
+            description="",
+            deadline_date=task["dueDate"],
+            is_important=False,
+            status="Спринт неделя",
+            responsible="Максим",
+        )
+        if page_id:
+            tt_notion_map[task["id"]] = {
+                "notion_page_id": page_id,
+                "project_id": task["projectId"],
+                "title": title,
+            }
+            notion_sprint[lower] = page_id
+            created += 1
+            print(f"  ➕ Создано в Notion из TickTick: {title[:60]}")
+
+    # Step 2: update map — remove entries no longer active this week (task moved or done)
+    # We don't close them here: TickTick REST API is unreliable for completed task status.
+    # Closures happen via Platrum is_finished flag (main sync above).
+    closed = 0
+    for tt_id in list(tt_notion_map.keys()):
+        if tt_id not in tt_ids_active:
+            del tt_notion_map[tt_id]
+
+    # Step 3: for tasks in Notion Спринт неделя with no TickTick pair in map,
+    # add them to tt_notion_map by matching title — so next run Step 2 catches them
+    for task in tt_tasks:
+        tid = task["id"]
+        if tid not in tt_notion_map:
+            lower = task["title"].lower()
+            if lower in notion_sprint:
+                tt_notion_map[tid] = {
+                    "notion_page_id": notion_sprint[lower],
+                    "project_id": task["projectId"],
+                    "title": task["title"],
+                }
+
+    return created, closed
+
+
+def ticktick_is_completed(task_id: str, project_id: str) -> bool:
+    """Check if a TickTick task is completed or gone.
+    TickTick Open API returns 500 for completed tasks and 404 for deleted ones —
+    both mean the task is no longer active."""
+    try:
+        r = requests.get(
+            f"{TICKTICK_BASE}/task/{task_id}",
+            headers={"Authorization": f"Bearer {TICKTICK_TOKEN}"},
+            params={"projectId": project_id} if project_id else {},
+            timeout=15,
+        )
+        if r.status_code == 404:
+            return True
+        if r.status_code == 200:
+            return r.json().get("status") == 2
+    except Exception as e:
+        print(f"  ticktick_is_completed error: {e}")
+    return False
+
+
+def notion_find_by_title(title: str) -> list[tuple[str, str]]:
+    """Find all active Notion pages matching title. Returns list of (page_id, status)."""
+    r = requests.post(
+        f"https://api.notion.com/v1/databases/{NOTION_PM_BACKLOG}/query",
+        headers={"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
+        json={"filter": {"property": "Задача", "title": {"equals": title}}},
+        timeout=15,
+    )
+    results = []
+    for row in r.json().get("results", []):
+        status = (row["properties"].get("Статус", {}).get("select") or {}).get("name", "")
+        if status not in ("Выполнено", "Отменено"):
+            results.append((row["id"], status))
+    return results
+
+
+def sync_ticktick_completions(tt_map: dict, task_map_by_id: dict) -> int:
+    """Check tracked TickTick tasks — if completed, close matching Notion pages by title.
+    Returns count of closed Notion pages."""
+    closed = 0
+    for platrum_id, tt_info in list(tt_map.items()):
+        task_id = tt_info.get("id", "")
+        project_id = tt_info.get("projectId", "")
+        if not task_id:
+            continue
+        if not ticktick_is_completed(task_id, project_id):
+            continue
+        # TickTick task is done — find task name and close all matching Notion pages
+        task = task_map_by_id.get(platrum_id)
+        if not task:
+            continue
+        name = task.get("name", "")
+        if not name:
+            continue
+        pages = notion_find_by_title(name)
+        for page_id, status in pages:
+            if notion_set_done(page_id):
+                print(f"  ✅ Notion закрыт по TickTick: {name[:60]} (был: {status})")
+                closed += 1
+    return closed
+
+
 def notion_set_done(page_id: str) -> bool:
     """Move a Notion page to Выполнено."""
     r = requests.patch(
@@ -379,6 +607,7 @@ def _create_notion_with_retry(retries: int = 3, delay: float = 5.0, **kwargs) ->
 
 def main():
     seen, partial, seen_auditor, notion_map, date_map, tt_map = load_state()
+    tt_notion_map = load_tt_notion_map()
     tasks = platrum_tasks()
     auditor_tasks = platrum_auditor_tasks()
 
@@ -414,6 +643,14 @@ def main():
 
     # --- Auto-promote backlog tasks whose deadline is now in the current week ---
     promoted = auto_promote_backlog()
+
+    # --- Full TickTick ↔ Notion sync (all tasks, not just Platrum-tracked) ---
+    tt_created, tt_closed = sync_ticktick_to_notion_full(tt_notion_map)
+    save_tt_notion_map(tt_notion_map)
+
+    # --- Sync Platrum-tracked TickTick completions → Notion ---
+    task_map_by_id = {str(t["id"]): t for t in tasks + auditor_tasks}
+    tt_closed += sync_ticktick_completions(tt_map, task_map_by_id)
 
     # --- Check for date changes in already-tracked responsible tasks ---
     task_map = {str(t["id"]): t for t in tasks}
@@ -600,7 +837,7 @@ def main():
             print(f"  Notion failed for auditor task [{task_id}]: {name}")
 
     save_state(seen, partial, seen_auditor, notion_map, date_map, tt_map)
-    print(f"Done. {len(new_tasks)} new, {len(retried)} retried, {len(new_auditor)} auditor, {done_count} completed, {updated_count} date-updated, {promoted} promoted.")
+    print(f"Done. {len(new_tasks)} new, {len(retried)} retried, {len(new_auditor)} auditor, {done_count} completed, {updated_count} date-updated, {promoted} promoted, {tt_created} tt-created-in-notion, {tt_closed} tt-closed.")
 
 
 if __name__ == "__main__":
