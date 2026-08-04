@@ -478,3 +478,41 @@ def test_is_working_false_at_idle():
     from d_brain.services.tmux_parse import is_working
 
     assert not is_working("❯\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n")
+
+
+def test_context_pct_remaining_detects_warning():
+    from d_brain.services.tmux_parse import context_pct_remaining
+
+    pane = (
+        "Some output...\n"
+        "                                                     5% until auto-compact\n"
+        "────────────────────────────────────────────────────────────────────────────\n"
+        "❯ \n"
+        "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents\n"
+    )
+    assert context_pct_remaining(pane) == 5
+
+
+def test_context_pct_remaining_various_percentages():
+    from d_brain.services.tmux_parse import context_pct_remaining
+
+    assert context_pct_remaining("10% until auto-compact") == 10
+    assert context_pct_remaining("15% until auto-compact") == 15
+    assert context_pct_remaining("1% until auto-compact") == 1
+
+
+def test_context_pct_remaining_none_when_absent():
+    from d_brain.services.tmux_parse import context_pct_remaining
+
+    pane = (
+        "Normal healthy session\n"
+        "❯ \n"
+        "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+    )
+    assert context_pct_remaining(pane) is None
+
+
+def test_context_pct_remaining_case_insensitive():
+    from d_brain.services.tmux_parse import context_pct_remaining
+
+    assert context_pct_remaining("5% until Auto-Compact") == 5

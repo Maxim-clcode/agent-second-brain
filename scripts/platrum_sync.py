@@ -351,7 +351,16 @@ def load_tt_notion_map() -> dict:
 
 def save_tt_notion_map(m: dict) -> None:
     TT_NOTION_MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TT_NOTION_MAP_FILE.write_text(json.dumps(m, indent=2))
+    try:
+        TT_NOTION_MAP_FILE.write_text(json.dumps(m, indent=2))
+    except PermissionError:
+        # File may have been created by root; try to fix ownership via chmod
+        import stat
+        try:
+            TT_NOTION_MAP_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+            TT_NOTION_MAP_FILE.write_text(json.dumps(m, indent=2))
+        except PermissionError:
+            print(f"  ⚠️ Cannot write {TT_NOTION_MAP_FILE} — skipping map save (sync still works)")
 
 
 def fetch_ticktick_projects() -> list[str]:

@@ -35,6 +35,7 @@ from pathlib import Path
 from d_brain.services.tmux_parse import (
     PaneState,
     classify_state,
+    context_pct_remaining,
     extract_reply,
     has_survey_prompt,
     is_complete,
@@ -368,6 +369,23 @@ class ClaudeSession:
     def clear(self) -> None:
         """Manual recovery only (durable-state-first: no scheduled clear)."""
         self.send_control("/clear")
+
+    def compact(self) -> None:
+        """Send /compact to summarise and trim the conversation context.
+
+        Unlike /clear this preserves a compact summary of the session history,
+        keeping skills and durable facts in the new context window.
+        """
+        self.send_control("/compact")
+
+    def context_pct_remaining(self) -> int | None:
+        """Return the % of context remaining shown in the pane, or None.
+
+        Claude Code emits "N% until auto-compact" in the status bar when
+        context is nearly full. Returns the integer N or None when the
+        warning is absent (context is fine).
+        """
+        return context_pct_remaining(self._capture())
 
     # ── sending ──────────────────────────────────────────────────────
 

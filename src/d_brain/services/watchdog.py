@@ -40,6 +40,8 @@ DEFAULT_STALL_THRESHOLD = 300.0  # 5 min stuck without visible work ⇒ wedged
 DEFAULT_MIN_DISK = 500_000_000  # 500 MB
 DEFAULT_ALERT_COOLDOWN = 3600.0  # first re-alert of a persistent fault: 1h
 DEFAULT_ALERT_COOLDOWN_MAX = 12 * 3600.0  # back-off cap (doubles 1h→2h→…→12h)
+DEFAULT_COMPACT_THRESHOLD = 15  # % remaining before watchdog triggers /compact
+DEFAULT_COMPACT_COOLDOWN = 600.0  # don't compact more often than every 10 min
 
 _SERVICEABLE = {
     PaneState.READY,
@@ -63,6 +65,8 @@ class Watchdog:
         min_disk_bytes: int = DEFAULT_MIN_DISK,
         alert_cooldown: float = DEFAULT_ALERT_COOLDOWN,
         alert_cooldown_max: float = DEFAULT_ALERT_COOLDOWN_MAX,
+        compact_threshold: int = DEFAULT_COMPACT_THRESHOLD,
+        compact_cooldown: float = DEFAULT_COMPACT_COOLDOWN,
     ) -> None:
         self.session = session
         self.runtime_dir = Path(runtime_dir)
@@ -77,6 +81,9 @@ class Watchdog:
         self._min_disk = min_disk_bytes
         self._alert_cooldown = alert_cooldown
         self._alert_cooldown_max = alert_cooldown_max
+        self._compact_threshold = compact_threshold
+        self._compact_cooldown = compact_cooldown
+        self._last_compact_ts = 0.0
         self._inflight = self.runtime_dir / "inflight"
         self._status = self.runtime_dir / "STATUS.md"
         self._last_alert_key: str | None = None
@@ -166,6 +173,23 @@ class Watchdog:
 
         if state == PaneState.READY:
             self._inflight.unlink(missing_ok=True)  # clear any orphan marker
+            # Auto-compact when context is nearly full and session is idle.
+            # Only compact when READY (not working) to avoid interrupting a turn.
+            pct = self.session.context_pct_remaining()
+            if pct is not None and pct <= self._compact_threshold:
+                now = self._clock()
+                if now - self._last_compact_ts >= self._compact_cooldown:
+                    logger.info(
+                        "context at %d%% remaining — triggering /compact", pct
+                    )
+                    self.session.compact()
+                    self._last_compact_ts = now
+                    self._maybe_alert(
+                        "auto_compact",
+                        f"🧹 Контекст заполнен на {100 - pct}% — запустил /compact автоматически.",
+                    )
+                    self._write_status("compacting")
+                    return "compacting"
         self._note_good()
         self._write_status("healthy")
         return "healthy"

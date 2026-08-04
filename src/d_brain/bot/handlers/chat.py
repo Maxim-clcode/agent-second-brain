@@ -29,6 +29,39 @@ logger = logging.getLogger(__name__)
 # Only handle private chats
 router.message.filter(F.chat.type == ChatType.PRIVATE)
 
+# Phrases Claude must never say about the backlog
+_FORBIDDEN_BACKLOG_PHRASES = (
+    "бэклог чист", "бэклог пуст", "беклог пуст", "беклог чист",
+    "backlog пуст", "backlog чист", "бэклог пустой", "беклог пустой",
+    "в бэклоге нет", "бэклог пуст", "бэклог — пуст", "бэклог — чист",
+    "бэклог сейчас пуст", "бэклог сейчас чист",
+)
+
+_BACKLOG_SELF_CORRECTION = (
+    "Стоп. Ты только что написал что бэклог пуст или чист — это фактическая ошибка. "
+    "В Notion PM Backlog есть активные задачи. "
+    "Перефразируй предыдущий ответ: убери фразу про пустой бэклог и объясни "
+    "почему конкретные задачи не попали в план (статус, приоритет, слоты заняты, "
+    "не тот день и т.п.). Только исправленный текст, без объяснений что ты исправляешь."
+)
+
+
+def _has_forbidden_backlog_phrase(text: str) -> bool:
+    lower = text.lower()
+    return any(phrase in lower for phrase in _FORBIDDEN_BACKLOG_PHRASES)
+
+
+def _sanitize_backlog_phrases(text: str) -> str:
+    """Hard replace any forbidden phrase as last resort."""
+    import re as _re
+    pattern = _re.compile(
+        r"б[еэ]клог\s+(чист|пуст|пустой)|"
+        r"в\s+б[еэ]клоге\s+нет|"
+        r"backlog\s+(пуст|чист)",
+        _re.IGNORECASE,
+    )
+    return pattern.sub("в бэклоге есть активные задачи", text)
+
 MAX_RESPONSE_LENGTH = 4096
 
 # Slash commands split by BEHAVIOR, not by the leading "/":
@@ -125,6 +158,16 @@ async def _process_and_reply(bot: Bot, chat_id: int, user_id: int, prompt: str) 
         response = await manager.send_message(user_id, prompt)
 
         if response:
+            # Guard: if Claude said "backlog is empty" — self-correction loop
+            if _has_forbidden_backlog_phrase(response):
+                logger.warning("Forbidden backlog phrase detected — requesting self-correction")
+                corrected = await manager.send_message(user_id, _BACKLOG_SELF_CORRECTION)
+                if corrected and not _has_forbidden_backlog_phrase(corrected):
+                    response = corrected
+                else:
+                    # Self-correction failed — hard sanitize as last resort
+                    logger.warning("Self-correction failed — applying hard sanitize")
+                    response = _sanitize_backlog_phrases(response)
             await send_response(bot, chat_id, response)
         else:
             logger.warning(
@@ -133,6 +176,8 @@ async def _process_and_reply(bot: Bot, chat_id: int, user_id: int, prompt: str) 
             # Retry once before giving up — don't reset session on first empty
             response = await manager.send_message(user_id, prompt)
             if response:
+                if _has_forbidden_backlog_phrase(response):
+                    response = _sanitize_backlog_phrases(response)
                 await send_response(bot, chat_id, response)
             else:
                 logger.warning("Empty response after retry for user %d", user_id)

@@ -13,13 +13,21 @@ from d_brain.services.watchdog import Watchdog
 
 class FakeSession:
     def __init__(
-        self, *, healthy=True, state=PaneState.READY, recover_ok=True, working=False
+        self,
+        *,
+        healthy=True,
+        state=PaneState.READY,
+        recover_ok=True,
+        working=False,
+        context_pct=None,  # None = no warning; int = % remaining
     ):
         self._healthy = healthy
         self.state = state
         self._recover_ok = recover_ok
         self.working = working
         self.recovered = 0
+        self.compacted = 0
+        self._context_pct = context_pct
 
     def is_healthy(self) -> bool:
         return self._healthy
@@ -35,6 +43,12 @@ class FakeSession:
         if self._recover_ok:
             self._healthy = True
         return self._recover_ok
+
+    def context_pct_remaining(self) -> int | None:
+        return self._context_pct
+
+    def compact(self) -> None:
+        self.compacted += 1
 
 
 def make_wd(tmp_path, session, *, disk_free=10_000_000_000, clock=None, alerts=None):
@@ -217,3 +231,102 @@ def test_status_file_written(tmp_path):
     wd = make_wd(tmp_path, sess)
     wd.check_once()
     assert (tmp_path / "STATUS.md").exists()
+
+
+# ── auto-compact ──────────────────────────────────────────────────────────
+
+
+def make_wd_compact(tmp_path, session, *, clock=None, alerts=None, threshold=15, cooldown=600.0):
+    clock = clock if clock is not None else {"now": 1000.0}
+    return Watchdog(
+        session,
+        runtime_dir=tmp_path,
+        disk_free_fn=lambda: 10_000_000_000,
+        clock_fn=lambda: clock["now"],
+        alert_fn=(alerts.append if alerts is not None else (lambda m: None)),
+        min_disk_bytes=500_000_000,
+        stall_threshold=300.0,
+        alert_cooldown=3600.0,
+        compact_threshold=threshold,
+        compact_cooldown=cooldown,
+    )
+
+
+def test_auto_compact_triggered_when_context_low(tmp_path):
+    """When context ≤ threshold% and session is READY, watchdog calls compact()."""
+    sess = FakeSession(state=PaneState.READY, context_pct=5)
+    clock = {"now": 1000.0}
+    wd = make_wd_compact(tmp_path, sess, clock=clock)
+    result = wd.check_once()
+    assert result == "compacting"
+    assert sess.compacted == 1
+
+
+def test_auto_compact_at_threshold_boundary(tmp_path):
+    """Compact triggers at exactly the threshold value."""
+    sess = FakeSession(state=PaneState.READY, context_pct=15)
+    wd = make_wd_compact(tmp_path, sess, threshold=15)
+    assert wd.check_once() == "compacting"
+    assert sess.compacted == 1
+
+
+def test_auto_compact_not_triggered_above_threshold(tmp_path):
+    """When context > threshold%, watchdog does not compact."""
+    sess = FakeSession(state=PaneState.READY, context_pct=20)
+    wd = make_wd_compact(tmp_path, sess, threshold=15)
+    assert wd.check_once() == "healthy"
+    assert sess.compacted == 0
+
+
+def test_auto_compact_not_triggered_when_no_warning(tmp_path):
+    """When no auto-compact warning is visible (None), watchdog does not compact."""
+    sess = FakeSession(state=PaneState.READY, context_pct=None)
+    wd = make_wd_compact(tmp_path, sess)
+    assert wd.check_once() == "healthy"
+    assert sess.compacted == 0
+
+
+def test_auto_compact_respects_cooldown(tmp_path):
+    """Compact is only triggered once per cooldown window."""
+    clock = {"now": 1000.0}
+    sess = FakeSession(state=PaneState.READY, context_pct=5)
+    wd = make_wd_compact(tmp_path, sess, clock=clock, cooldown=600.0)
+    assert wd.check_once() == "compacting"
+    assert sess.compacted == 1
+    # Second tick within cooldown — must not compact again
+    clock["now"] += 300.0
+    assert wd.check_once() == "compacting" or wd.check_once() == "healthy"
+    # Total compacts still 1 after two more ticks
+    wd.check_once()
+    wd.check_once()
+    assert sess.compacted == 1
+
+
+def test_auto_compact_fires_again_after_cooldown(tmp_path):
+    """After the cooldown expires, compact can trigger again."""
+    clock = {"now": 1000.0}
+    sess = FakeSession(state=PaneState.READY, context_pct=5)
+    wd = make_wd_compact(tmp_path, sess, clock=clock, cooldown=600.0)
+    wd.check_once()
+    assert sess.compacted == 1
+    clock["now"] += 601.0
+    wd.check_once()
+    assert sess.compacted == 2
+
+
+def test_auto_compact_not_triggered_when_working(tmp_path):
+    """Compact must NOT fire while the session is processing a request."""
+    sess = FakeSession(state=PaneState.UNKNOWN, working=True, context_pct=5)
+    wd = make_wd_compact(tmp_path, sess)
+    wd.check_once()
+    assert sess.compacted == 0
+
+
+def test_auto_compact_sends_alert(tmp_path):
+    """Watchdog sends a Telegram alert when it auto-compacts."""
+    alerts = []
+    sess = FakeSession(state=PaneState.READY, context_pct=5)
+    wd = make_wd_compact(tmp_path, sess, alerts=alerts)
+    wd.check_once()
+    assert alerts
+    assert "compact" in alerts[0].lower() or "🧹" in alerts[0]

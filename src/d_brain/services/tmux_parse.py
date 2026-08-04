@@ -184,6 +184,22 @@ def is_working(text: str) -> bool:
 
 _SURVEY_RE = re.compile(r"How is Claude doing this session\?")
 
+# Claude Code shows "N% until auto-compact" in the status bar when context is
+# nearing its limit (e.g. "5% until auto-compact"). Matched over the whole pane
+# (it can appear mid-screen as a progress-bar annotation).
+_AUTO_COMPACT_RE = re.compile(r"(\d+)%\s+until\s+auto-compact", re.I)
+
+
+def context_pct_remaining(text: str) -> int | None:
+    """Return the % of context remaining, or None if the warning is not visible.
+
+    Claude Code emits "N% until auto-compact" when context is nearly full.
+    Returns the integer N (e.g. 5 for "5% until auto-compact"), or None when
+    the warning is absent (context is fine).
+    """
+    m = _AUTO_COMPACT_RE.search(text)
+    return int(m.group(1)) if m else None
+
 
 def has_survey_prompt(text: str) -> bool:
     """True iff the periodic feedback survey is on screen.
